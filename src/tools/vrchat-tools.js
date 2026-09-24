@@ -37,4 +37,21 @@ export const vrchatTools = [
       return formatResult({ success: true, data: resolveVRChatContext(inst) });
     },
   },
+  {
+    name: "unity_vrc_build",
+    description:
+      "Build the avatar or world with the VRChat SDK's own builder, as the SDK panel's Build button does: runs the build " +
+      "preprocessors (VRCFury, NDMF, optimizers) and the SDK's validation, and reports errors and bundle size. " +
+      "test:true runs Build & Test instead (an avatar joins the local test avatars; a world opens in a local VRChat client). Never uploads.",
+    vrchatProjectType: "any",
+    pluginFeature: "VRCHAT_BUILD",
+    inputSchema: {
+      type: "object",
+      properties: {
+        avatarPath: { type: "string", description: "Avatar GameObject path or name (avatar projects; default: the scene's avatar)." },
+        test: { type: "boolean", description: "Build & Test locally instead of only building (default false). For a world this launches VRChat." },
+      },
+    },
+    handler: async (args) => formatResult(await vrchatBridge.vrcBuild(args)),
+  },
 ];

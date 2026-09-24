@@ -10,9 +10,9 @@ It's an MCP server that lets Claude, Cursor, or any other MCP client drive the U
 
 For the full list of Unity tools, see the [upstream README](https://github.com/AnkleBreaker-Studio/unity-mcp-server#readme).
 
-## Changes in this fork (v2.37.0)
+## Changes in this fork (v2.38.0)
 
-- **39 VRChat tools (`unity_vrc_*`)**
+- **40 VRChat tools (`unity_vrc_*`)**
   - **Avatar analysis:** performance rank against PC and Quest limits, the 256-bit synced parameter budget, and an audit of the baked avatar: Write Defaults, missing scripts, texture memory, animation paths that no longer resolve, mesh bounds, and Anchor Overrides.
   - **Avatar authoring:** descriptor inspection, viseme auto-mapping, playable layers, expression parameters, expression menus that respect the 8-control limit, PhysBones, contacts, Modular Avatar and VRCFury components.
   - **VRCFury features:** create or update a Toggle (objects, blendshapes, material swaps, menu path, saved, default) and Armature Link.
@@ -21,11 +21,12 @@ For the full list of Unity tools, see the [upstream README](https://github.com/A
   - **Blendshapes:** list and set them by name, with Unified Expressions, ARKit, and SRanipal face-tracking coverage.
   - **Poiyomi:** material lock status, batch lock/unlock, and reading and writing properties.
   - **Worlds:** scene descriptor and spawn points, Udon behaviour listing, type-safe writes to public variables, UdonSharp behaviours (script, program asset, and component), VRWorldToolkit validation, and a content summary that flags unspatialized audio.
+  - **Build:** runs the VRChat SDK's own build (preprocessors, validation and bundle export) and reports errors and bundle size, or a local Build & Test. It never uploads.
   - **Project context:** detects whether the project is an avatar, world, or neither, plus the ecosystem packages installed (MA, NDMF, VRCFury, d4rk, VRWorldToolkit, Gesture Manager, Av3Emulator, Poiyomi).
 - **Project-aware tool list:** avatar projects only see avatar tools and world projects only see world tools. Non-VRChat projects see no VRChat tools.
-- **VRChat safety guards:** on a VRChat project, `unity_build`, the player/quality/physics settings tools, and edits to reserved layers 0–22 or their collision matrix are refused. Pass `override: true` on a single call to run one anyway. There is no global switch for this.
+- **VRChat safety guards:** on a VRChat project, `unity_build` is not listed (use `unity_vrc_build`), and it, the player/quality/physics settings tools, and edits to reserved layers 0–22 or their collision matrix are refused. Pass `override: true` on a single call to run one anyway. There is no global switch for this.
 - **Trimmed default surface:** UMA, Amplify, MPPM, Input System, and NavMesh tools are pinned to the advanced tier. You can still reach them through `unity_advanced_tool`.
-- **Plugin protocol:** the server only advertises the VRChat tools the connected plugin can answer (protocol 2 for the original set, protocol 4 for the authoring tools above). Updating the plugin mid-session is picked up on the next call.
+- **Plugin protocol:** the server only advertises the VRChat tools the connected plugin can answer (protocol 2 for the original set, protocol 4 for the authoring tools, protocol 5 for the build tool). Updating the plugin mid-session is picked up on the next call.
 - **Tests:** unit tests for detection and tool-surface shaping, protocol tests, and live avatar and world suites.
 
 See [CHANGELOG.md](CHANGELOG.md) for details.

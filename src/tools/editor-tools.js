@@ -526,6 +526,8 @@ export const editorTools = [
   {
     name: "unity_build",
     description: "Start a build of the Unity project for a target platform. Refused on VRChat projects unless 'override: true' is passed.",
+    // VRChat content is built by the SDK (unity_vrc_build), so this is not listed there.
+    hiddenOnVRChat: true,
     inputSchema: {
       type: "object",
       properties: {

@@ -21,23 +21,40 @@ export const vrcProjectContext = vrcGetProjectContext;
 // the deferral invisible to callers: they still get the finished analysis.
 const ANALYSIS_POLL_INTERVAL_MS = 1500;
 const ANALYSIS_TIMEOUT_MS = Number(process.env.UNITY_VRC_ANALYSIS_TIMEOUT || 600000);
+// An SDK build runs the same preprocessors plus the bundle export and compression.
+const BUILD_TIMEOUT_MS = Number(process.env.UNITY_VRC_BUILD_TIMEOUT || 1200000);
+// Each unanswered poll already waited out the queue timeout (2 min by default).
+const MAX_UNANSWERED_POLLS = 5;
 
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-async function runDeferredAnalysis(route, params) {
+async function runDeferredAnalysis(route, params, timeoutMs = ANALYSIS_TIMEOUT_MS, onTimeout = null) {
   const submitted = await sendCommand(route, params);
   const job = submitted?.data ?? submitted;
 
   // No jobId means a plugin that still answers inline — use its answer as-is.
   if (!job || !job.jobId) return submitted;
 
-  const deadline = Date.now() + ANALYSIS_TIMEOUT_MS;
+  const deadline = Date.now() + timeoutMs;
   let last = null;
+  let unanswered = 0;
   while (Date.now() < deadline) {
     await sleep(ANALYSIS_POLL_INTERVAL_MS);
     const polled = await sendCommand("vrc/avatar/job", { jobId: job.jobId, port: params?.port });
+    // No plugin answer at all: the poll outlived the queue timeout while the job blocked Unity's
+    // main thread (the job is still there, so ask again), or Unity is gone (several in a row).
+    if (polled?.success === false && polled.data === undefined) {
+      if (++unanswered >= MAX_UNANSWERED_POLLS) {
+        return {
+          success: false,
+          error: `Lost contact with Unity while job ${job.jobId} (${route}) ran; it may be waiting on a dialog, or have closed: ${polled.error}`,
+        };
+      }
+      continue;
+    }
+    unanswered = 0;
     last = polled?.data ?? polled;
     if (!last) continue;
     if (last.status === "completed") return { success: true, data: last.result };
@@ -45,7 +62,8 @@ async function runDeferredAnalysis(route, params) {
     if (last.error) return { success: false, error: last.error };
   }
 
-  const waited = Math.round(ANALYSIS_TIMEOUT_MS / 1000);
+  const waited = Math.round(timeoutMs / 1000);
+  if (onTimeout) return { success: false, error: onTimeout(waited, job.jobId) };
   return {
     success: false,
     error:
@@ -63,6 +81,20 @@ export async function vrcAvatarJob(params = {}) {
   return sendCommand("vrc/avatar/job", params);
 }
 
+
+/**
+ * Build the avatar or world with the VRChat SDK's builder (Build, or Build & Test with test:true).
+ * Never uploads. Deferred like the analysis routes: the build blocks Unity's main thread.
+ * @param {object} [params] - Parameters: avatarPath, test, port
+ * @returns {Promise<object>}
+ */
+export async function vrcBuild(params = {}) {
+  return runDeferredAnalysis("vrc/build", params, BUILD_TIMEOUT_MS, (waited, jobId) =>
+    `The VRChat SDK build did not finish within ${waited}s. It is still running in Unity as job ${jobId}. ` +
+    `If Unity shows a dialog (a VRCFury error, for one), it waits for someone to close it. ` +
+    `Raise UNITY_VRC_BUILD_TIMEOUT if this build legitimately takes longer.`
+  );
+}
 
 /**
  * Analyze VRChat avatar performance rank, limiting statistic, and contributing categories.

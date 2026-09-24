@@ -315,6 +315,16 @@ describe("VRChat tool surface shaping", () => {
     }
   });
 
+  test("unity_build is listed only outside VRChat projects; unity_vrc_build needs plugin protocol 5", () => {
+    const tools = [{ name: "unity_build", hiddenOnVRChat: true }, vrchatTools.find((t) => t.name === "unity_vrc_build")];
+    const names = (ctx, instance) => filterToolsForProject(tools, ctx, instance).map((t) => t.name);
+    assert.deepEqual(names({ projectType: "avatar", packages: {} }, { protocolVersion: 5 }), ["unity_vrc_build"]);
+    assert.deepEqual(names({ projectType: "world", packages: {} }, { protocolVersion: 5 }), ["unity_vrc_build"]);
+    assert.deepEqual(names({ projectType: "avatar", packages: {} }, { protocolVersion: 4 }), []);
+    assert.deepEqual(names({ projectType: "none", packages: {} }), ["unity_build"]);
+    assert.deepEqual(names(undefined), ["unity_build"]);
+  });
+
   test("Task 9.1: No tool in the completed surface performs a VRChat upload or publish", () => {
     const allVrcTools = [
       ...vrchatTools,

@@ -44,6 +44,8 @@ function pluginTooOld(tool, instance) {
  *    - only kept if one of those packages is available
  * 5. If a tool has pluginFeature, it is omitted when the instance's plugin reported an
  *    older protocolVersion than the feature needs.
+ * 6. A tool with hiddenOnVRChat (a standard tool VRChat has its own route for) is omitted
+ *    from VRChat projects. It stays callable by name, where the plugin's guard decides.
  *
  * @param {Array<object>} tools Array of tool definitions
  * @param {object} [projectContext] { projectType, sdkVersion, packages }
@@ -63,7 +65,7 @@ export function filterToolsForProject(tools, projectContext, instance) {
 
     // Non-VRChat tool: keep
     if (!tool.vrchatProjectType && !tool.vrchatIntegration) {
-      return true;
+      return !tool.hiddenOnVRChat || projType === "none";
     }
 
     // VRChat tool against non-VRChat project: omit

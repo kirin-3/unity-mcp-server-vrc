@@ -21,6 +21,8 @@ export const PLUGIN_FEATURES = {
   // protocolVersion 4: VRChat authoring v2 — VRCFury Toggle/Armature Link, outfit attach,
   // play-mode emulator control and capture, blendshapes, UdonSharp create/attach.
   VRCHAT_AUTHORING_V2: 4,
+  // protocolVersion 5: vrc/build — VRChat SDK Build / Build & Test.
+  VRCHAT_BUILD: 5,
 };
 
 /**

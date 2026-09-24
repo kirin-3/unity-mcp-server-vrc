@@ -2,6 +2,21 @@
 
 All notable changes to this package will be documented in this file.
 
+## [2.38.0] - 2026-09-24
+
+Companion to plugin **2.42.0**: a VRChat SDK build tool. It needs plugin protocol 5. With an older plugin it is hidden, and calling it directly returns an error naming the protocol it needs.
+
+### Added
+- `unity_vrc_build`: build the avatar or world with the VRChat SDK's own builder API, as the SDK panel's Build button does. The build preprocessors (VRCFury, NDMF, Modular Avatar, optimizers) run, then the SDK's validation, then the bundle export. The result has the bundle path and size in MB, the SDK's error (`errorType` tells validation from build failures), and the console errors logged during the build. Avatar validation issues only reach the console, so that is where they are read. `test: true` runs Build & Test instead: an avatar joins the local test avatars, a world opens in a local VRChat client. It never uploads. It opens the SDK control panel if it is closed, and does not need you to be logged in. `UNITY_VRC_BUILD_TIMEOUT` (default 1200 s) bounds the wait; a heavy avatar took about 4.5 minutes.
+
+### Changed
+- `unity_build` is no longer listed on VRChat projects, where it was always refused. It is still listed on other projects, and a call by name still reaches the plugin's guard (`override: true` still works).
+- Deferred VRChat jobs (the build and avatar analysis) keep polling when a poll gets no answer because the job is blocking Unity's main thread for longer than the queue timeout. Before, such a poll ended the call with a queue timeout while Unity kept working. Five unanswered polls in a row still end it, since Unity may be waiting on a dialog or have closed.
+
+### Known limits
+- The build runs the SDK's own preprocess loop, so a failing VRCFury hook opens VRCFury's error dialog, as the Build button does. Unity waits for someone to close it, then the tool reports the failure.
+- A build leaves the open scene marked modified. That comes from the SDK's build, which also records a fog-stripping change in Graphics Settings.
+
 ## [2.37.0] - 2026-09-24
 
 Companion to plugin **2.41.0**: VRChat authoring v2. The new tools need plugin protocol 4. With an older plugin they are hidden, and calling one directly returns an error naming the protocol it needs.

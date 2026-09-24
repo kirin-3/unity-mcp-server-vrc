@@ -788,19 +788,19 @@ describe("VRChat project detection and surface shaping (mock bridge)", () => {
       })
     );
 
-    // Avatar and world plugins speak protocol 4 (authoring v2); NoPoi and BareWorld stay on 2.
+    // Avatar and world plugins speak protocol 5 (SDK build); NoPoi and BareWorld stay on 2.
     bridgeAvatar = new MockBridge({
       instance: {
         projectName: "AvatarProject",
         projectPath: avatarDir,
-        protocolVersion: 4,
+        protocolVersion: 5,
       },
     });
     bridgeWorld = new MockBridge({
       instance: {
         projectName: "WorldProject",
         projectPath: worldDir,
-        protocolVersion: 4,
+        protocolVersion: 5,
       },
     });
     bridgeNonVrc = new MockBridge({
@@ -1307,6 +1307,24 @@ describe("VRChat project detection and surface shaping (mock bridge)", () => {
       };
     });
 
+    // SDK build: deferred like the analysis. The first job poll goes unanswered, as when the
+    // build blocks Unity's main thread past the queue timeout.
+    let buildPolls = 0;
+    bridgeAvatar.on("vrc/build", (p) => ({
+      success: true,
+      jobId: p.avatarPath === "Broken" ? "build-broken" : "build-ok",
+      status: "running",
+      route: "vrc/build",
+    }));
+    bridgeAvatar.on("vrc/avatar/job", (p) => {
+      if (++buildPolls === 1) return { __timeout: true, error: "Timed out on the main thread" };
+      const result =
+        p.jobId === "build-broken"
+          ? { success: false, error: "Avatar validation failed", errors: ["Your avatar is disabled in the scene hierarchy!"], uploaded: false }
+          : { success: true, projectType: "avatar", mode: "buildAndTest", avatar: "TestAvatar", bundleSizeMB: 41.2, uploaded: false };
+      return { success: true, jobId: p.jobId, status: "completed", elapsedMs: 90000, result };
+    });
+
     bridgeWorld.on("vrc/world/descriptor/get", (p) => {
       if (p?.emptyScene) {
         return {
@@ -1458,8 +1476,8 @@ describe("VRChat project detection and surface shaping (mock bridge)", () => {
     writeFileSync(
       registryPath,
       JSON.stringify([
-        { port: bridgeAvatar.port, projectName: "AvatarProject", projectPath: avatarDir, protocolVersion: 4, unityVersion: "2022.3.22f1", lastSeen: now },
-        { port: bridgeWorld.port, projectName: "WorldProject", projectPath: worldDir, protocolVersion: 4, unityVersion: "2022.3.22f1", lastSeen: now },
+        { port: bridgeAvatar.port, projectName: "AvatarProject", projectPath: avatarDir, protocolVersion: 5, unityVersion: "2022.3.22f1", lastSeen: now },
+        { port: bridgeWorld.port, projectName: "WorldProject", projectPath: worldDir, protocolVersion: 5, unityVersion: "2022.3.22f1", lastSeen: now },
         { port: bridgeNonVrc.port, projectName: "NonVrcProject", projectPath: "C:/NonVrc", protocolVersion: 1, unityVersion: "2022.3.22f1", lastSeen: now },
         { port: bridgeNoPoi.port, projectName: "NoPoiAvatarProject", projectPath: noPoiDir, protocolVersion: 2, unityVersion: "2022.3.22f1", lastSeen: now },
         { port: bridgeBareWorld.port, projectName: "BareWorldProject", projectPath: bareWorldDir, protocolVersion: 2, unityVersion: "2022.3.22f1", lastSeen: now },
@@ -2083,6 +2101,33 @@ describe("VRChat project detection and surface shaping (mock bridge)", () => {
     const refused = await client.callTool("unity_vrc_blendshapes_list");
     assert.equal(refused.isError, true);
     assert.match(refused.payloadText, /protocol 4 or later/);
+  });
+
+  test("unity_vrc_build replaces unity_build on VRChat projects and outlasts a poll lost to a blocked editor", async () => {
+    await client.callTool("unity_select_instance", { projectName: "AvatarProject" });
+    let names = await toolNames();
+    assert.ok(names.includes("unity_vrc_build"));
+    assert.ok(!names.includes("unity_build"), "unity_build is not listed on VRChat projects");
+
+    const built = await client.callTool("unity_vrc_build", { test: true });
+    assert.equal(built.isError, false, built.payloadText);
+    const data = built.payload?.data || built.payload;
+    assert.equal(data.bundleSizeMB, 41.2);
+    assert.equal(data.uploaded, false);
+    assert.equal(bridgeAvatar.seen.filter((s) => s.route === "vrc/build").at(-1).params.test, true);
+
+    const failed = await client.callTool("unity_vrc_build", { avatarPath: "Broken" });
+    assert.equal(failed.isError, true);
+    assert.match(failed.payloadText, /Avatar validation failed/);
+    assert.match(failed.payloadText, /disabled in the scene hierarchy/);
+
+    await client.callTool("unity_select_instance", { projectName: "NonVrcProject" });
+    names = await toolNames();
+    assert.ok(names.includes("unity_build"), "unity_build stays on non-VRChat projects");
+    assert.ok(!names.includes("unity_vrc_build"));
+
+    await client.callTool("unity_select_instance", { projectName: "NoPoiAvatarProject" });
+    assert.ok(!(await toolNames()).includes("unity_vrc_build"), "a protocol-2 plugin has no vrc/build route");
   });
 
   test("a plugin updated mid-session is picked up without re-selecting the instance", async () => {
