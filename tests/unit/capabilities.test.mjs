@@ -66,3 +66,22 @@ describe("error-shape detection (isError seam)", () => {
     assert.equal(isErrorText(JSON.stringify({ data: { entries: [{ type: "error", message: "x" }] } })), false);
   });
 });
+
+describe("transient poll errors", () => {
+  test("a per-request poll timeout is transient, not fatal", async () => {
+    const { isTransientError } = await import("../../src/unity-editor-bridge.js");
+
+    // AbortSignal.timeout() rejects with TimeoutError, not AbortError. Misclassifying it
+    // killed the poll loop on any Unity operation that blocked longer than one poll window.
+    const timeoutErr = Object.assign(new Error("The operation was aborted due to timeout"), {
+      name: "TimeoutError",
+    });
+    assert.equal(isTransientError(timeoutErr, null), true);
+
+    assert.equal(isTransientError(Object.assign(new Error("x"), { name: "AbortError" }), null), true);
+    assert.equal(isTransientError(Object.assign(new Error("x"), { code: "ECONNRESET" }), null), true);
+
+    // A genuine fault must still be fatal, or the loop spins until the deadline.
+    assert.equal(isTransientError(new TypeError("Invalid URL"), null), false);
+  });
+});

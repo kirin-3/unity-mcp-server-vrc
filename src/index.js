@@ -35,6 +35,12 @@ import { umaTools } from "./tools/uma-tools.js";
 import { probuilderTools } from "./tools/probuilder-tools.js";
 import { contextTools } from "./tools/context-tools.js";
 import { instanceTools } from "./tools/instance-tools.js";
+import { vrchatTools } from "./tools/vrchat-tools.js";
+import { vrchatAvatarTools } from "./tools/vrchat-avatar-tools.js";
+import { vrchatWorldTools } from "./tools/vrchat-world-tools.js";
+import { vrchatShaderTools } from "./tools/vrchat-shader-tools.js";
+import { filterToolsForProject, checkToolProjectGate } from "./vrchat-surface.js";
+import { resolveVRChatContext, invalidateVRChatContext } from "./vrchat-detect.js";
 import { splitToolTiers } from "./tool-tiers.js";
 import { setAgentId, getProjectContext } from "./unity-editor-bridge.js";
 import {
@@ -45,6 +51,8 @@ import {
   setCurrentAgent,
   setPortOverride,
   clearPortOverride,
+  onInstanceSelectionChanged,
+  getTargetInstance,
 } from "./instance-discovery.js";
 import { debugLog } from "./state-persistence.js";
 import { isErrorText, firstSentence, stripSchemaDescriptions } from "./response-format.js";
@@ -119,6 +127,10 @@ const ALL_TOOLS = [
   ...coreTools,
   ...metaTools,
   ...contextTools,
+  ...vrchatTools,
+  ...vrchatAvatarTools,
+  ...vrchatWorldTools,
+  ...vrchatShaderTools,
 ];
 console.error(
   `[MCP] Tool tiers: ${coreCount} core + ${advancedCount} advanced (via unity_advanced_tool) = ${coreCount + advancedCount} total, ${ALL_TOOLS.length} exposed`
@@ -286,7 +298,9 @@ const server = new Server(
   },
   {
     capabilities: {
-      tools: {},
+      tools: {
+        listChanged: true,
+      },
       resources: {},
     },
     instructions: [
@@ -303,6 +317,14 @@ const server = new Server(
     ].join(" "),
   }
 );
+
+// Listen for instance selection changes to invalidate cache and notify client
+onInstanceSelectionChanged(async (port) => {
+  invalidateVRChatContext(port);
+  try {
+    await server.sendToolListChanged();
+  } catch {}
+});
 
 // ─── List Tools Handler ───
 // Inject an optional `port` parameter into every unity_* tool schema (except
@@ -325,8 +347,16 @@ const TOOLS_SKIP_PORT_INJECT = new Set([
 const COMPACT_TOOLS = process.env.UNITY_MCP_COMPACT_TOOLS === "1";
 
 server.setRequestHandler(ListToolsRequestSchema, async () => {
+  let selectedInstance = getSelectedInstance();
+  if (!selectedInstance) {
+    await ensureInstanceDiscovery();
+    selectedInstance = getSelectedInstance();
+  }
+  const vrcContext = resolveVRChatContext(selectedInstance);
+  const activeTools = filterToolsForProject(ALL_TOOLS, vrcContext);
+
   return {
-    tools: ALL_TOOLS.map(({ name, description, inputSchema }) => {
+    tools: activeTools.map(({ name, description, inputSchema }) => {
       let schema = inputSchema;
       // Inject port into unity_* tools that target an Editor instance
       if (
@@ -426,6 +456,19 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
               "Multiple Unity instances are running. You must call unity_list_instances and then unity_select_instance before using other Unity tools.",
           },
         ],
+        isError: true,
+      };
+    }
+
+    // Refuse wrong project type or missing integration (Task 4.6).
+    // Must follow the port override, not just the per-agent selection — a port-routed
+    // call skips discovery, so getSelectedInstance() is stale or null there.
+    const _targetInst = getTargetInstance();
+    const activeContext = _targetInst?.projectPath ? resolveVRChatContext(_targetInst) : null;
+    const gateCheck = checkToolProjectGate(tool, activeContext);
+    if (!gateCheck.allowed) {
+      return {
+        content: [{ type: "text", text: gateCheck.reason }],
         isError: true,
       };
     }

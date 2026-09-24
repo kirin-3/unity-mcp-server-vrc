@@ -54,6 +54,29 @@ export function clearPortOverride() {
   }
 }
 
+const _selectionChangeListeners = new Set();
+
+/**
+ * Register a callback to run when instance selection changes.
+ * @param {Function} fn (port) => void
+ */
+export function onInstanceSelectionChanged(fn) {
+  _selectionChangeListeners.add(fn);
+  return () => _selectionChangeListeners.delete(fn);
+}
+
+/**
+ * Trigger registered selection change callbacks.
+ * @param {number} port
+ */
+export function triggerInstanceSelectionChanged(port) {
+  for (const fn of _selectionChangeListeners) {
+    try {
+      fn(port);
+    } catch {}
+  }
+}
+
 /**
  * Set the current agent context for subsequent state operations.
  * Must be called before any tool handler execution.
@@ -68,6 +91,23 @@ export function setCurrentAgent(agentId) {
  * @returns {object|null} Selected instance info, or null if none selected.
  */
 export function getSelectedInstance() {
+  return _agentInstances.get(_currentAgentId) || null;
+}
+
+/**
+ * Get the instance this request actually targets, using the same priority as
+ * getActiveBridgeUrl: per-request port override > per-agent selection. Callers that
+ * reason about the *project* (not just the URL) must use this — getSelectedInstance
+ * alone ignores the override and answers about the wrong project, or about none at
+ * all when a port-routed call skipped discovery.
+ * @returns {object|null}
+ */
+export function getTargetInstance() {
+  if (_portOverride !== null) {
+    // Registry read is sync and network-free; the override already asserts the port.
+    const entry = readRegistryFile().find((e) => e.port === _portOverride);
+    return entry || { port: _portOverride };
+  }
   return _agentInstances.get(_currentAgentId) || null;
 }
 
@@ -226,6 +266,7 @@ export async function selectInstance(port) {
   _agentInstances.set(_currentAgentId, match);
   _agentSelectionRequired.set(_currentAgentId, false);
   debugLog(`selectInstance: agent ${_currentAgentId} selected port ${port} (${match.projectName})`);
+  triggerInstanceSelectionChanged(port);
 
   return {
     success: true,
@@ -361,6 +402,7 @@ export async function autoSelectInstance() {
       _agentInstances.set(_currentAgentId, defaultInstance);
       _agentSelectionRequired.set(_currentAgentId, false);
       debugLog(`autoSelect: agent ${_currentAgentId} → single default instance on port ${CONFIG.editorBridgePort}`);
+      triggerInstanceSelectionChanged(CONFIG.editorBridgePort);
       return {
         autoSelected: true,
         instance: defaultInstance,
@@ -382,6 +424,7 @@ export async function autoSelectInstance() {
     _agentInstances.set(_currentAgentId, instances[0]);
     _agentSelectionRequired.set(_currentAgentId, false);
     debugLog(`autoSelect: agent ${_currentAgentId} → single instance on port ${instances[0].port}`);
+    triggerInstanceSelectionChanged(instances[0].port);
     return {
       autoSelected: true,
       instance: instances[0],

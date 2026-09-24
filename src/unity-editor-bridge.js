@@ -38,7 +38,7 @@ function sleep(ms) {
  * Returns true if the error looks like a transient connection issue
  * (server temporarily down during Unity domain reload).
  */
-function isTransientError(error, response) {
+export function isTransientError(error, response) {
   if (error) {
     // Connection refused / reset / aborted â€" server is restarting
     const msg = error.message || "";
@@ -48,7 +48,14 @@ function isTransientError(error, response) {
       msg.includes("ECONNREFUSED") ||
       msg.includes("ECONNRESET") ||
       msg.includes("fetch failed") ||
-      error.name === "AbortError"
+      error.name === "AbortError" ||
+      // AbortSignal.timeout() rejects with a TimeoutError, NOT an AbortError. Without this
+      // the per-request poll timeout (10s) was classified as fatal and killed the whole poll
+      // loop, discarding a ticket Unity was still working on — any main-thread operation that
+      // blocks longer than one poll window (an NDMF avatar bake takes 20-30s) failed here
+      // while completing fine inside Unity.
+      error.name === "TimeoutError" ||
+      msg.includes("aborted due to timeout")
     );
   }
   // HTTP 500/503 during domain reload (server half-alive)

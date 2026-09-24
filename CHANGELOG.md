@@ -2,6 +2,45 @@
 
 All notable changes to this package will be documented in this file.
 
+## [2.36.0] - 2026-09-20
+
+Companion to plugin **2.40.0** — **The VRChat-Focused Toolset Release**.
+
+### Added
+- **VRChat Avatar Analysis**:
+  - `unity_vrc_avatar_performance`: evaluate overall performance rank, limiting statistic, and contributing metrics against PC and Quest thresholds.
+  - `unity_vrc_avatar_parameters`: synced parameter memory budget breakdown (256-bit limit) with per-type bit costs.
+  - `unity_vrc_avatar_audit`: avatar audits for Write Defaults consistency, missing script components, and texture memory breakdown.
+- **VRChat Avatar Authoring**:
+  - `unity_vrc_avatar_descriptor_get`: inspect view position, lip-sync mode, eye look settings, and playable layers.
+  - `unity_vrc_avatar_descriptor_set_visemes`: automatically map 15 standard visemes from blendshapes, reporting unmapped visemes without guessing.
+  - `unity_vrc_avatar_descriptor_set_playable_layer`: assign AnimatorControllers to playable layers.
+  - `unity_vrc_avatar_parameter_add`: add/modify expression parameters with strict 256-bit budget protection (over-budget additions strictly refused).
+  - `unity_vrc_avatar_menu_get` & `unity_vrc_avatar_menu_add_control`: inspect and add controls to expression menus with 8-control limit protection.
+  - `unity_vrc_physbone_add`, `unity_vrc_physbone_configure`, `unity_vrc_physbone_list`: create, modify, and list PhysBone chains with affected transform count.
+  - `unity_vrc_contact_add` & `unity_vrc_contact_list`: author and inspect VRCContactSender and VRCContactReceiver components.
+  - `unity_vrc_avatar_non_destructive_list`: discover and inspect Modular Avatar and VRCFury components.
+  - `unity_vrc_modular_avatar_add` & `unity_vrc_vrcfury_add`: create non-destructive components, gated on package availability.
+- **Poiyomi Shader Tooling**:
+  - `unity_vrc_poiyomi_status`: list materials with lock state and asset paths.
+  - `unity_vrc_poiyomi_lock` & `unity_vrc_poiyomi_unlock`: batch lock/unlock Poiyomi materials into optimized shaders.
+  - `unity_vrc_poiyomi_get_property` & `unity_vrc_poiyomi_set_property`: inspect and modify Poiyomi shader properties.
+- **VRChat World Tooling**:
+  - `unity_vrc_world_descriptor_get`: inspect scene descriptor, spawn points, spawn order, respawn height, and reference camera.
+  - `unity_vrc_world_spawn_add` & `unity_vrc_world_descriptor_set_spawns`: create spawn points and configure world descriptor.
+  - `unity_vrc_world_udon_list` & `unity_vrc_world_udon_get_variables`: list Udon behaviours and inspect public variables with types.
+  - `unity_vrc_world_udon_set_variable`: write public variables with strict type safety (type mismatches strictly refused, leaving variables untouched).
+  - `unity_vrc_world_validate`: run VRWorldToolkit automated world validation and report findings.
+  - `unity_vrc_world_content_summary`: inspect mirrors, lights, video players, and audio sources, flagging unspatialized audio sources.
+- **Project Context & Surface Shaping**:
+  - `unity_vrc_get_project_context`: automatic detection of VRChat project type (`avatar`, `world`, or `none`) and ecosystem packages (Modular Avatar, NDMF, VRCFury, d4rkAvatarOptimizer, VRWorldToolkit, Poiyomi).
+  - Dynamic tool surface shaping: avatar tools advertised only on avatar projects, world tools only on world projects.
+- **VRChat Safety Guards**: on a detected VRChat project, six operations that silently break such a project now refuse to run and explain what would break — `unity_build`, `unity_settings_set_player`, `unity_settings_set_quality_level`, `unity_settings_set_physics`, `unity_taglayer_set_layer` (reserved layers 0–22) and `unity_physics_set_collision_layer` (reserved layers 0–22). Each accepts a per-call `override: true`; there is deliberately no environment variable or config setting, so the override cannot be left on. Overridden calls report `guardOverridden: true`. Enforcement lives in the plugin's route handlers, so `unity_advanced_tool` does not bypass it. Non-VRChat projects are unaffected.
+
+### Changed
+- Pinned specialized categories unused in VRChat (`uma`, `amplify`, `scenario`/`mppm`, `input`, `navmesh` — 62 tools) to the advanced tier so they can never reach the advertised catalog. These already sat in the advanced tier, so this does not shrink the catalog today; it prevents drift. Reachability via `unity_advanced_tool` is unchanged.
+- Advertised catalog is now project-aware: 80 tools on a non-VRChat project, up to 103 on an avatar project, up to 94 on a world project (380 tools total).
+
 ## [2.35.6] - 2026-07-27
 
 Companion to plugin **2.39.5** (community-reported fixes).

@@ -174,6 +174,30 @@ const CORE_TOOLS = new Set([
 ]);
 
 /**
+ * Tool categories hidden from the advertised surface for VRChat-focused installs.
+ * Hiding is not removal: hidden tools stay in the advanced tier — callable via
+ * unity_advanced_tool and discoverable through unity_list_advanced_tools — so no
+ * route or tool definition is deleted. splitToolTiers keeps them out of the core
+ * tier even if a future edit lists one in CORE_TOOLS, making the hiding structural.
+ */
+export const HIDDEN_CATEGORIES = new Set([
+  "uma", // 15 tools — zero UMA installs across the target installation's projects
+  "amplify", // 23 tools — this setup uses Poiyomi, not Amplify Shader Editor
+  "mppm", // Multiplayer Play Mode — VRChat uses av3emulator/ClientSim instead
+  "scenario", // the mppm tools' route category (unity_mppm_* maps to scenario/* endpoints)
+  "input", // Input System — VRChat owns player input; not used in-world
+  "navmesh", // NavMesh — VRChat has no player navmesh
+]);
+
+/**
+ * Category component of a tool name: unity_uma_inspect_fbx → "uma".
+ * (Category views and the hidden-tier check derive it identically.)
+ */
+export function toolCategory(toolName) {
+  return toolName.replace(/^unity_/, "").split("_")[0];
+}
+
+/**
  * Levenshtein distance (iterative two-row) — powers "did you mean" suggestions
  * for mistyped advanced tool names. (Idea credit: community PR #31 by D3vCrow.)
  */
@@ -214,7 +238,8 @@ export function splitToolTiers(allEditorTools) {
   const advanced = [];
 
   for (const tool of allEditorTools) {
-    if (CORE_TOOLS.has(tool.name)) {
+    const hidden = HIDDEN_CATEGORIES.has(toolCategory(tool.name));
+    if (CORE_TOOLS.has(tool.name) && !hidden) {
       core.push(tool);
     } else {
       advanced.push(tool);
@@ -224,9 +249,7 @@ export function splitToolTiers(allEditorTools) {
   // Group advanced tools by category for the catalog
   const categories = {};
   for (const t of advanced) {
-    // Extract category from tool name: unity_animation_create_clip → animation
-    const parts = t.name.replace(/^unity_/, "").split("_");
-    const cat = parts[0];
+    const cat = toolCategory(t.name);
     if (!categories[cat]) categories[cat] = [];
     categories[cat].push(t.name);
   }
@@ -323,7 +346,7 @@ export function splitToolTiers(allEditorTools) {
         }
       }
 
-      const categoryOf = (name) => name.replace(/^unity_/, "").split("_")[0];
+      const categoryOf = toolCategory;
 
       // ── Level 3: one tool's full definition ──
       if (tool) {

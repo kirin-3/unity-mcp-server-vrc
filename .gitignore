@@ -4,3 +4,7 @@ node_modules/
 *.mcpb
 .DS_Store
 Thumbs.db
+openspec/
+.agents/
+.claude/
+.opencode/

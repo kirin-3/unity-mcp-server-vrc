@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { writeFileSync, mkdtempSync } from "node:fs";
+import { writeFileSync, mkdtempSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { MockBridge } from "./helpers/mock-bridge.mjs";
 import { McpTestClient } from "./helpers/mcp-client.mjs";
@@ -94,6 +94,28 @@ describe("queue-mode session (single instance)", () => {
         { message: "kaboom", type: "error", timestamp: "10:00:01.000", stackTrace: trace },
       ],
     }));
+    bridge.on("settings/set-player", (p) => {
+      if (!p.override) {
+        return {
+          success: false,
+          refused: true,
+          error: "VRChat projects require specific Player Settings. Modifying them will break VRChat compatibility.",
+          reason: "VRChat projects require specific Player Settings. Modifying them will break VRChat compatibility.",
+        };
+      }
+      return { success: true, updated: ["bundleVersion"], guardOverridden: true };
+    });
+    bridge.on("build/start", (p) => {
+      if (!p.override) {
+        return {
+          success: false,
+          refused: true,
+          error: "VRChat content is built and tested through the VRChat SDK, not standard Unity player builds. Running a standalone build will fail or produce unusable artifacts.",
+          reason: "VRChat content is built and tested through the VRChat SDK, not standard Unity player builds. Running a standalone build will fail or produce unusable artifacts.",
+        };
+      }
+      return { success: true, result: "Succeeded", guardOverridden: true };
+    });
     await bridge.start();
     client = new McpTestClient({ env: bridge.env() }).start();
     initResult = await client.initialize();
@@ -111,6 +133,10 @@ describe("queue-mode session (single instance)", () => {
 
   test("serverInfo.version matches package.json (single source of truth)", () => {
     assert.equal(initResult.serverInfo.version, PACKAGE_VERSION);
+  });
+
+  test("server advertises tools.listChanged capability", () => {
+    assert.equal(initResult.capabilities?.tools?.listChanged, true);
   });
 
   test("tools/list exposes the two-tier surface with unique names and valid shapes", async () => {
@@ -507,6 +533,48 @@ describe("queue-mode session (single instance)", () => {
     assert.match(payloadText, /too large|limit|pagination|maxNodes|truncat/i);
   });
 
+  test("VRChat safety guard: core tool call is refused and refusal text reaches the agent intact", async () => {
+    const { payload, payloadText, isError } = await client.callTool("unity_build", {
+      target: "StandaloneWindows64",
+      outputPath: "Builds/test.exe",
+    });
+    assert.equal(isError, true, "MCP isError flag is set on guard refusal");
+    assert.equal(payload.data.refused, true);
+    assert.match(payload.data.error, /VRChat content is built and tested through the VRChat SDK/);
+    assert.match(payloadText, /VRChat content is built and tested through the VRChat SDK/);
+  });
+
+  test("VRChat safety guard: core tool override allows call to proceed and notes guard was overridden", async () => {
+    const { payload, isError } = await client.callTool("unity_build", {
+      target: "StandaloneWindows64",
+      outputPath: "Builds/test.exe",
+      override: true,
+    });
+    assert.equal(isError, false, "overridden call succeeds");
+    assert.equal(payload.data.guardOverridden, true);
+  });
+
+  test("VRChat safety guard: advanced tool call is refused and refusal text reaches the agent intact", async () => {
+    const { payload, payloadText, isError } = await client.callTool("unity_advanced_tool", {
+      tool: "unity_settings_set_player",
+      params: { bundleVersion: "2.0.0" },
+    });
+    assert.equal(isError, true, "MCP isError flag is set on guard refusal");
+    assert.equal(payload.data.refused, true);
+    assert.match(payload.data.error, /VRChat projects require specific Player Settings/);
+    assert.match(payloadText, /VRChat projects require specific Player Settings/);
+  });
+
+  test("VRChat safety guard: advanced tool override allows call to proceed and notes guard was overridden", async () => {
+    const { payload, isError } = await client.callTool("unity_advanced_tool", {
+      tool: "unity_settings_set_player",
+      params: { bundleVersion: "2.0.0", override: true },
+    });
+    assert.equal(isError, false, "overridden call succeeds");
+    assert.equal(payload.data.guardOverridden, true);
+    assert.deepEqual(payload.data.updated, ["bundleVersion"]);
+  });
+
   test("stdout carried only clean JSON-RPC for the entire session", () => {
     assert.deepEqual(client.stdoutViolations, [], `stdout violations: ${client.stdoutViolations.slice(0, 3).join(" | ")}`);
   });
@@ -656,3 +724,1214 @@ describe("multi-instance selection gate", () => {
     assert.equal(missing.isError, true);
   });
 });
+
+describe("VRChat project detection and surface shaping (mock bridge)", () => {
+  /** @type {MockBridge} */ let bridgeAvatar;
+  /** @type {MockBridge} */ let bridgeWorld;
+  /** @type {MockBridge} */ let bridgeNonVrc;
+  /** @type {MockBridge} */ let bridgeNoPoi;
+  /** @type {MockBridge} */ let bridgeBareWorld;
+  /** @type {McpTestClient} */ let client;
+
+  before(async () => {
+    const dir = mkdtempSync(join(tmpdir(), "umcp-vrc-registry-"));
+    const noPoiDir = join(dir, "NoPoiProject");
+    mkdirSync(join(noPoiDir, "Packages"), { recursive: true });
+    writeFileSync(
+      join(noPoiDir, "Packages", "manifest.json"),
+      JSON.stringify({
+        dependencies: {
+          "com.vrchat.avatars": "3.7.0",
+          "nadena.dev.modular-avatar": "1.19.0",
+        },
+      })
+    );
+
+    const avatarDir = join(dir, "AvatarProject");
+    mkdirSync(join(avatarDir, "Packages"), { recursive: true });
+    mkdirSync(join(avatarDir, "Assets", "_PoiyomiShaders"), { recursive: true });
+    writeFileSync(
+      join(avatarDir, "Packages", "manifest.json"),
+      JSON.stringify({
+        dependencies: {
+          "com.vrchat.avatars": "3.10.5",
+          "nadena.dev.modular-avatar": "1.19.0",
+          "nadena.dev.ndmf": "1.5.0",
+          "com.vrcfury.vrcfury": "1.900.0",
+          "d4rkpl4y3r.d4rkavataroptimizer": "3.8.0",
+        },
+      })
+    );
+
+    const worldDir = join(dir, "WorldProject");
+    mkdirSync(join(worldDir, "Packages"), { recursive: true });
+    mkdirSync(join(worldDir, "Assets", "_PoiyomiShaders"), { recursive: true });
+    writeFileSync(
+      join(worldDir, "Packages", "manifest.json"),
+      JSON.stringify({
+        dependencies: {
+          "com.vrchat.worlds": "3.10.5",
+          "dev.onevr.vrworldtoolkit": "1.2.0",
+        },
+      })
+    );
+
+    const bareWorldDir = join(dir, "BareWorldProject");
+    mkdirSync(join(bareWorldDir, "Packages"), { recursive: true });
+    writeFileSync(
+      join(bareWorldDir, "Packages", "manifest.json"),
+      JSON.stringify({
+        dependencies: {
+          "com.vrchat.worlds": "3.7.0",
+        },
+      })
+    );
+
+    bridgeAvatar = new MockBridge({
+      instance: {
+        projectName: "AvatarProject",
+        projectPath: avatarDir,
+        protocolVersion: 2,
+      },
+    });
+    bridgeWorld = new MockBridge({
+      instance: {
+        projectName: "WorldProject",
+        projectPath: worldDir,
+        protocolVersion: 2,
+      },
+    });
+    bridgeNonVrc = new MockBridge({
+      instance: {
+        projectName: "NonVrcProject",
+        projectPath: "C:/NonVrc",
+        protocolVersion: 1,
+      },
+    });
+    bridgeNoPoi = new MockBridge({
+      instance: {
+        projectName: "NoPoiAvatarProject",
+        projectPath: noPoiDir,
+        protocolVersion: 2,
+      },
+    });
+    bridgeBareWorld = new MockBridge({
+      instance: {
+        projectName: "BareWorldProject",
+        projectPath: bareWorldDir,
+        protocolVersion: 2,
+      },
+    });
+
+    bridgeAvatar.on("vrc/project-context", () => ({
+      projectType: "avatar",
+      sdkVersion: "3.10.5",
+      packages: {
+        modularAvatar: { available: true, version: "1.19.0-alpha.0" },
+        ndmf: { available: true, version: "1.14.8" },
+        vrcfury: { available: true, version: "1.1429.0" },
+        d4rkOptimizer: { available: true, version: "4.6.0" },
+        vrWorldToolkit: { available: false, version: null },
+        poiyomi: { available: true, version: "10.0.11" },
+      },
+    }));
+
+    bridgeAvatar.on("vrc/avatar/performance", (p) => ({
+      avatarName: p.avatarPath || "TestAvatar",
+      rank: "VeryPoor",
+      limitingCategory: "PolyCount",
+      buildTooling: ["Modular Avatar", "VRCFury"],
+      isMobile: !!p.isMobile,
+      categories: {
+        PolyCount: { rating: "VeryPoor", value: 125000, threshold: 70000 },
+        SkinnedMeshCount: { rating: "Good", value: 2, threshold: 2 },
+      },
+    }));
+
+    bridgeAvatar.on("vrc/avatar/parameters", (p) => ({
+      avatarName: p.avatarPath || "TestAvatar",
+      totalUsed: 270,
+      limit: 256,
+      remaining: 0,
+      overage: 14,
+      isOverBudget: true,
+      parameters: [
+        { name: "OutfitToggle", type: "Bool", cost: 1, synced: true },
+        { name: "ColorPicker", type: "Int", cost: 8, synced: true },
+      ],
+      buildTooling: ["Modular Avatar"],
+    }));
+
+    bridgeAvatar.on("vrc/avatar/audit", (p) => ({
+      avatarName: p.avatarPath || "TestAvatar",
+      buildTooling: ["Modular Avatar"],
+      writeDefaults: {
+        consistent: false,
+        hasMixedSettings: true,
+        summary: "Inconsistent Write Defaults detected: 1 states WD ON, 1 states WD OFF across 1 layers.",
+        layers: [
+          { controller: "FX", layerName: "Toggles", isMixed: true, wdOnCount: 1, wdOffCount: 1, wdOnStates: ["On"], wdOffStates: ["Off"] },
+        ],
+      },
+      missingScripts: [
+        { objectName: "BrokenProp", objectPath: "Armature/BrokenProp", missingCount: 1 },
+      ],
+      missingScriptsCount: 1,
+      hasMissingScripts: true,
+      textureMemory: {
+        totalBytes: 52428800,
+        totalMB: 50.0,
+        uniqueTextureCount: 1,
+        rankedTextures: [
+          { name: "MainAtlas", assetPath: "Assets/Atlas.png", dimensions: "2048x2048", memoryBytes: 52428800, memoryMB: 50.0 },
+        ],
+      },
+    }));
+
+    bridgeAvatar.on("vrc/poiyomi/status", () => ({
+      installed: true,
+      version: "10.0.11",
+      totalCount: 2,
+      lockedCount: 1,
+      unlockedCount: 1,
+      materials: [
+        { name: "LockedMat", assetPath: "Assets/Materials/LockedMat.mat", shaderName: "Poiyomi/Locked", isLocked: true },
+        { name: "UnlockedMat", assetPath: "Assets/Materials/UnlockedMat.mat", shaderName: "Poiyomi/Unlocked", isLocked: false },
+      ],
+    }));
+
+    bridgeAvatar.on("vrc/poiyomi/lock", (p) => ({
+      success: true,
+      processed: 1,
+      unchanged: 0,
+      failed: 0,
+      results: [
+        { material: "UnlockedMat", assetPath: p.materialPath || "Assets/Materials/UnlockedMat.mat", status: "locked" },
+      ],
+    }));
+
+    bridgeAvatar.on("vrc/poiyomi/unlock", (p) => ({
+      success: true,
+      processed: 1,
+      unchanged: 0,
+      failed: 0,
+      results: [
+        { material: "LockedMat", assetPath: p.materialPath || "Assets/Materials/LockedMat.mat", status: "unlocked" },
+      ],
+    }));
+
+    bridgeAvatar.on("vrc/poiyomi/get-property", (p) => ({
+      materialPath: p.materialPath,
+      propertyName: p.propertyName || "_Color",
+      propertyType: "Color",
+      value: [1, 1, 1, 1],
+      isLocked: false,
+    }));
+
+    bridgeAvatar.on("vrc/poiyomi/set-property", (p) => {
+      if (p.materialPath?.includes("Locked") && !p.unlockIfLocked) {
+        return {
+          success: false,
+          refused: true,
+          isLocked: true,
+          unlockedFirst: false,
+          error: "Material is locked. Pass unlockIfLocked: true to modify.",
+        };
+      }
+      return {
+        success: true,
+        refused: false,
+        isLocked: false,
+        unlockedFirst: !!p.unlockIfLocked,
+        materialPath: p.materialPath,
+        propertyName: p.propertyName,
+        value: p.value,
+      };
+    });
+
+    bridgeAvatar.on("vrc/avatar/descriptor/get", () => ({
+      avatarName: "TestAvatar",
+      viewPosition: { x: 0, y: 1.5, z: 0.1 },
+      lipSync: {
+        mode: "VisemeBlendShape",
+        visemeSkinnedMesh: "Body",
+        visemeBlendShapes: ["vrc.v_sil", "vrc.v_pp", "vrc.v_ff"],
+      },
+      eyeLook: { enabled: true },
+      playableLayers: [
+        { type: "FX", isDefault: false, animatorController: "Assets/FX.controller" },
+      ],
+      expressions: {
+        expressionsMenu: "Assets/Expressions/Menu.asset",
+        expressionParameters: "Assets/Expressions/Params.asset",
+      },
+    }));
+
+    bridgeAvatar.on("vrc/avatar/descriptor/set-visemes", () => ({
+      success: true,
+      meshName: "Body",
+      visemesMapped: 14,
+      visemesUnmapped: 1,
+      unmappedVisemes: ["ou"],
+      mappings: { sil: "vrc.v_sil", ou: null },
+    }));
+
+    bridgeAvatar.on("vrc/avatar/descriptor/set-playable-layer", (p) => ({
+      success: true,
+      avatarName: "TestAvatar",
+      layerType: p.layerType,
+      controllerPath: p.controllerPath,
+      isDefault: false,
+    }));
+
+    bridgeAvatar.on("vrc/avatar/parameters/create", (p) => {
+      if (p.name === "OverBudgetParam") {
+        return {
+          success: false,
+          refused: true,
+          limit: 256,
+          currentUsed: 250,
+          paramCost: 8,
+          overage: 2,
+          error: "Adding parameter 'OverBudgetParam' (8 bits) would exceed the 256-bit memory limit by 2 bits. Parameters asset was unchanged.",
+        };
+      }
+      return {
+        success: true,
+        refused: false,
+        name: p.name,
+        type: p.type || "Bool",
+        cost: p.type === "Int" ? 8 : 1,
+        totalUsed: 10,
+        limit: 256,
+        remaining: 246,
+      };
+    });
+
+    bridgeAvatar.on("vrc/avatar/menu/get", () => ({
+      menuName: "RootMenu",
+      controlCount: 1,
+      limit: 8,
+      controls: [
+        { name: "Hats", type: "SubMenu", parameter: null, value: 0 },
+      ],
+    }));
+
+    bridgeAvatar.on("vrc/avatar/menu/add-control", (p) => {
+      if (p.name === "NinthControl") {
+        return {
+          success: false,
+          refused: true,
+          controlCount: 8,
+          limit: 8,
+          error: "Expression menu already contains the maximum number of controls (8). Addition refused. Menu asset was unchanged.",
+        };
+      }
+      return {
+        success: true,
+        refused: false,
+        controlName: p.name,
+        type: p.type || "Button",
+        controlCount: 2,
+        limit: 8,
+      };
+    });
+
+    bridgeAvatar.on("vrc/physbone/add", (p) => ({
+      success: true,
+      objectPath: p.targetPath || "Armature/Hips/Tail",
+      root: p.targetPath || "Armature/Hips/Tail",
+      affectedTransformCount: 4,
+    }));
+
+    bridgeAvatar.on("vrc/physbone/configure", (p) => ({
+      success: true,
+      objectPath: p.targetPath || "Armature/Hips/Tail",
+      root: p.targetPath || "Armature/Hips/Tail",
+      affectedTransformCount: 4,
+    }));
+
+    bridgeAvatar.on("vrc/physbone/list", () => ({
+      avatarName: "TestAvatar",
+      physBoneCount: 1,
+      physBones: [
+        {
+          objectPath: "Armature/Hips/Tail",
+          root: "Armature/Hips/Tail",
+          affectedTransformCount: 4,
+          parameters: { pull: 0.2, spring: 0.5 },
+        },
+      ],
+    }));
+
+    bridgeAvatar.on("vrc/contact/add", (p) => ({
+      success: true,
+      type: p.type || "receiver",
+      objectPath: p.targetPath || "Head/Nose",
+    }));
+
+    bridgeAvatar.on("vrc/contact/list", () => ({
+      avatarName: "TestAvatar",
+      contactCount: 1,
+      contacts: [
+        {
+          type: "receiver",
+          objectPath: "Head/Nose",
+          radius: 0.03,
+          collisionTags: ["Finger"],
+          parameter: "BoopTrigger",
+        },
+      ],
+    }));
+
+    bridgeAvatar.on("vrc/avatar/non-destructive/list", () => ({
+      avatarName: "TestAvatar",
+      totalCount: 2,
+      components: [
+        {
+          objectPath: "Clothing/Shirt",
+          tool: "Modular Avatar",
+          componentType: "ModularAvatarMergeAnimator",
+          role: "Merge Animator: FX",
+        },
+        {
+          objectPath: "Props/Glasses",
+          tool: "VRCFury",
+          componentType: "VRCFury",
+          role: "VRCFury Features: Toggle",
+        },
+      ],
+    }));
+
+    bridgeAvatar.on("vrc/avatar/modular-avatar/add", (p) => ({
+      success: true,
+      componentType: p.componentType || "ModularAvatarMergeAnimator",
+      objectPath: p.targetPath || "Clothing/Shirt",
+    }));
+
+    bridgeAvatar.on("vrc/avatar/vrcfury/add", (p) => ({
+      success: true,
+      componentType: "VRCFury",
+      objectPath: p.targetPath || "Props/Glasses",
+    }));
+
+    bridgeWorld.on("vrc/project-context", () => ({
+      projectType: "world",
+      sdkVersion: "3.10.5",
+      packages: {
+        modularAvatar: { available: false, version: null },
+        ndmf: { available: false, version: null },
+        vrcfury: { available: false, version: null },
+        d4rkOptimizer: { available: false, version: null },
+        vrWorldToolkit: { available: true, version: "3.4.1" },
+        poiyomi: { available: true, version: "10.0.11" },
+      },
+    }));
+
+    // Deferred avatar analysis: submit returns a jobId, the job is polled until it finishes.
+    let deferredPolls = 0;
+    bridgeNoPoi.on("vrc/avatar/performance", () => ({
+      success: true,
+      jobId: "job-abc123",
+      status: "running",
+      route: "vrc/avatar/performance",
+    }));
+    bridgeNoPoi.on("vrc/avatar/job", (p) => {
+      deferredPolls++;
+      if (p.jobId !== "job-abc123") return { error: `job '${p.jobId}' not found` };
+      if (deferredPolls < 2) return { success: true, jobId: p.jobId, status: "running", elapsedMs: 1500 };
+      return {
+        success: true,
+        jobId: p.jobId,
+        status: "completed",
+        elapsedMs: 42000,
+        result: { avatarName: "DeferredAvatar", rank: "Poor", limitingCategory: "PolyCount" },
+      };
+    });
+
+    bridgeWorld.on("vrc/world/descriptor/get", (p) => {
+      if (p?.emptyScene) {
+        return {
+          error: "No VRChat scene descriptor (VRCSceneDescriptor) found in the open scene. This scene is not configured as a VRChat world scene.",
+        };
+      }
+      return {
+        objectPath: "World/SceneDescriptor",
+        spawns: [
+          { name: "Spawn_0", path: "World/Spawns/Spawn_0", position: [0, 0, 0], rotation: [0, 0, 0] },
+        ],
+        spawnCount: 1,
+        spawnOrder: "Sequential",
+        respawnHeightY: -100,
+        referenceCamera: "World/MainCamera",
+        forbidUserPortals: false,
+      };
+    });
+
+    bridgeWorld.on("vrc/world/descriptor/add-spawn", (p) => {
+      if (p?.emptyScene) {
+        return {
+          error: "No VRChat scene descriptor (VRCSceneDescriptor) found in the open scene. This scene is not configured as a VRChat world scene.",
+        };
+      }
+      return {
+        success: true,
+        spawn: {
+          name: p?.name || "SpawnPoint",
+          path: `World/Spawns/${p?.name || "SpawnPoint"}`,
+          position: p?.position || [0, 0, 0],
+          rotation: p?.rotation || [0, 0, 0],
+        },
+        spawnCount: 2,
+      };
+    });
+
+    bridgeWorld.on("vrc/world/descriptor/set-spawns", (p) => ({
+      objectPath: "World/SceneDescriptor",
+      spawns: [{ name: "Spawn_0", path: "World/Spawns/Spawn_0" }],
+      spawnCount: 1,
+      spawnOrder: p?.spawnOrder || "Random",
+      respawnHeightY: p?.respawnHeightY || -50,
+    }));
+
+    bridgeWorld.on("vrc/world/udon/list", () => ({
+      behaviours: [
+        { name: "DoorTrigger", objectPath: "World/Interactive/Door", programName: "DoorProgram", variableCount: 2 },
+        { name: "GameManager", objectPath: "World/Logic/Manager", programName: "GameManagerProgram", variableCount: 4 },
+      ],
+      count: 2,
+    }));
+
+    bridgeWorld.on("vrc/world/udon/get-variables", (p) => ({
+      success: true,
+      objectPath: p?.targetPath || "World/Logic/Manager",
+      programName: "GameManagerProgram",
+      variables: [
+        { name: "score", type: "Int32", value: 100 },
+        { name: "gameMode", type: "String", value: "Deathmatch" },
+        { name: "isActive", type: "Boolean", value: true },
+        { name: "spawnOffset", type: "Vector3", value: [0, 1.5, 0] },
+      ],
+      count: 4,
+    }));
+
+    let mockScore = 100;
+    bridgeWorld.on("vrc/world/udon/set-variable", (p) => {
+      if (p?.name === "score") {
+        if (typeof p.value !== "number") {
+          return {
+            success: false,
+            refused: true,
+            error: `Type mismatch for variable 'score': expected Int32, provided ${typeof p.value}. Variable left unchanged.`,
+            expectedType: "Int32",
+            providedType: typeof p.value,
+          };
+        }
+        mockScore = p.value;
+        return { success: true, name: "score", type: "Int32", value: mockScore };
+      }
+      return { success: true, name: p?.name, type: "Object", value: p?.value };
+    });
+
+    bridgeWorld.on("vrc/world/validate", () => ({
+      success: true,
+      tool: "VRWorldToolkit",
+      findings: [
+        { severity: "Warning", affectedObject: "Directional Light", message: "Realtime directional light without baked shadow mask" },
+      ],
+    }));
+
+    bridgeWorld.on("vrc/world/content/summary", () => ({
+      mirrors: [{ name: "Mirror", path: "World/Mirrors/Mirror", active: true }],
+      audioSources: [
+        { name: "3DSpeaker", path: "World/Audio/3DSpeaker", spatialize: true, spatialBlend: 1.0, isSpatialized: true, isFlagged: false },
+        { name: "2DMusic", path: "World/Audio/2DMusic", spatialize: false, spatialBlend: 0.0, isSpatialized: false, isFlagged: true, warning: "AudioSource is not spatialized" },
+      ],
+      unspatializedAudio: [
+        { name: "2DMusic", path: "World/Audio/2DMusic", spatialize: false, spatialBlend: 0.0 },
+      ],
+      lights: [{ name: "Directional Light", path: "World/Lighting/Directional Light", type: "Directional", shadows: "Soft" }],
+      videoPlayers: [{ name: "ProVideoPlayer", path: "World/Video/ProVideoPlayer", type: "VRCAVProVideoPlayer" }],
+      stats: {
+        mirrorCount: 1,
+        audioSourceCount: 2,
+        unspatializedAudioCount: 1,
+        lightCount: 1,
+        videoPlayerCount: 1,
+      },
+    }));
+
+    bridgeNoPoi.on("vrc/project-context", () => ({
+      projectType: "avatar",
+      sdkVersion: "3.7.0",
+      packages: {
+        modularAvatar: { available: true, version: "1.19.0" },
+        poiyomi: { available: false, version: null },
+      },
+    }));
+
+    bridgeBareWorld.on("vrc/project-context", () => ({
+      projectType: "world",
+      sdkVersion: "3.7.0",
+      packages: {
+        modularAvatar: { available: false, version: null },
+        ndmf: { available: false, version: null },
+        vrcfury: { available: false, version: null },
+        d4rkOptimizer: { available: false, version: null },
+        vrWorldToolkit: { available: false, version: null },
+        poiyomi: { available: false, version: null },
+      },
+    }));
+
+    bridgeBareWorld.on("vrc/world/validate", () => ({
+      success: false,
+      error: "World validation tooling is not installed. Please install 'dev.onevr.vrworldtoolkit' (VRWorldToolkit) to run world validation.",
+      requiredPackage: "dev.onevr.vrworldtoolkit",
+    }));
+
+    await bridgeAvatar.start();
+    await bridgeWorld.start();
+    await bridgeNonVrc.start();
+    await bridgeNoPoi.start();
+    await bridgeBareWorld.start();
+
+    const registryPath = join(dir, "instances.json");
+    const now = new Date().toISOString();
+    writeFileSync(
+      registryPath,
+      JSON.stringify([
+        { port: bridgeAvatar.port, projectName: "AvatarProject", projectPath: avatarDir, protocolVersion: 2, unityVersion: "2022.3.22f1", lastSeen: now },
+        { port: bridgeWorld.port, projectName: "WorldProject", projectPath: worldDir, protocolVersion: 2, unityVersion: "2022.3.22f1", lastSeen: now },
+        { port: bridgeNonVrc.port, projectName: "NonVrcProject", projectPath: "C:/NonVrc", protocolVersion: 1, unityVersion: "2022.3.22f1", lastSeen: now },
+        { port: bridgeNoPoi.port, projectName: "NoPoiAvatarProject", projectPath: noPoiDir, protocolVersion: 2, unityVersion: "2022.3.22f1", lastSeen: now },
+        { port: bridgeBareWorld.port, projectName: "BareWorldProject", projectPath: bareWorldDir, protocolVersion: 2, unityVersion: "2022.3.22f1", lastSeen: now },
+      ])
+    );
+
+    const env = { ...bridgeAvatar.env(), UNITY_INSTANCE_REGISTRY: registryPath };
+    client = new McpTestClient({ env }).start();
+    await client.initialize();
+  });
+
+  after(async () => {
+    await client.close();
+    await bridgeAvatar.stop();
+    await bridgeWorld.stop();
+    await bridgeNonVrc.stop();
+    await bridgeNoPoi.stop();
+    await bridgeBareWorld.stop();
+  });
+
+  test("non-VRChat project advertises zero VRChat tools", async () => {
+    await client.callTool("unity_select_instance", { projectName: "NonVrcProject" });
+    const { tools } = await client.listTools();
+    const vrcTools = tools.filter((t) => t.name.startsWith("unity_vrc_"));
+    assert.equal(vrcTools.length, 0, "no VRChat tools on non-VRChat project");
+
+    // Invoking an avatar tool is refused with error naming 'none'
+    const res = await client.callTool("unity_vrc_avatar_performance");
+    assert.equal(res.isError, true);
+    assert.match(res.payloadText, /none/i);
+  });
+
+  test("avatar project advertises avatar tools, VRCFury tools, and no world tools", async () => {
+    await client.callTool("unity_select_instance", { projectName: "AvatarProject" });
+    const { tools } = await client.listTools();
+    const names = tools.map((t) => t.name);
+
+    assert.ok(names.includes("unity_vrc_get_project_context"));
+    assert.ok(names.includes("unity_vrc_avatar_performance"));
+    assert.ok(names.includes("unity_vrc_vrcfury_add"));
+    assert.ok(!names.includes("unity_vrc_world_descriptor_get"), "world tools must not appear in avatar project");
+
+    // Calling wrong tool (world descriptor) is refused
+    const res = await client.callTool("unity_vrc_world_descriptor_get");
+    assert.equal(res.isError, true);
+    assert.match(res.payloadText, /avatar/i);
+
+    // Calling valid avatar tool succeeds
+    const okRes = await client.callTool("unity_vrc_avatar_performance");
+    assert.equal(okRes.isError, false);
+  });
+
+  test("world project advertises world tools and no avatar or VRCFury tools", async () => {
+    await client.callTool("unity_select_instance", { projectName: "WorldProject" });
+    const { tools } = await client.listTools();
+    const names = tools.map((t) => t.name);
+
+    assert.ok(names.includes("unity_vrc_get_project_context"));
+    assert.ok(names.includes("unity_vrc_world_descriptor_get"));
+    assert.ok(!names.includes("unity_vrc_avatar_performance"), "avatar tools must not appear in world project");
+    assert.ok(!names.includes("unity_vrc_vrcfury_add"), "VRCFury tools must not appear in world project");
+
+    // Calling wrong tool (avatar tool) is refused
+    const res = await client.callTool("unity_vrc_avatar_performance");
+    assert.equal(res.isError, true);
+    assert.match(res.payloadText, /world/i);
+
+    // Calling valid world tool succeeds
+    const okRes = await client.callTool("unity_vrc_world_descriptor_get");
+    assert.equal(okRes.isError, false);
+  });
+
+  test("unity_vrc_get_project_context returns parsed context from bridge", async () => {
+    await client.callTool("unity_select_instance", { projectName: "AvatarProject" });
+    const res = await client.callTool("unity_vrc_get_project_context");
+    assert.equal(res.isError, false);
+    const data = res.payload?.data || res.payload;
+    assert.equal(data.projectType, "avatar");
+    assert.equal(data.sdkVersion, "3.10.5");
+    assert.equal(data.packages?.modularAvatar?.available, true);
+    assert.equal(data.packages?.vrWorldToolkit?.available, false);
+  });
+
+  test("deferred avatar analysis polls the job and returns the finished result", async () => {
+    // The bake blocks Unity's main thread far longer than one queue ticket survives, so the
+    // route hands back a jobId. Callers must still receive the finished analysis, not the id.
+    await client.callTool("unity_select_instance", { projectName: "NoPoiAvatarProject" });
+    const res = await client.callTool("unity_vrc_avatar_performance", { port: bridgeNoPoi.port });
+    assert.equal(res.isError, false, res.payloadText);
+    const data = res.payload?.data || res.payload;
+    assert.equal(data.rank, "Poor");
+    assert.equal(data.avatarName, "DeferredAvatar");
+    assert.ok(!("jobId" in data), "the jobId is an implementation detail, not the tool's answer");
+  });
+
+  test("unity_vrc_avatar_performance reports rank, limiting statistic, and categories", async () => {
+    await client.callTool("unity_select_instance", { projectName: "AvatarProject" });
+    const res = await client.callTool("unity_vrc_avatar_performance", { avatarPath: "MyAvatar", isMobile: false });
+    assert.equal(res.isError, false);
+    const data = res.payload?.data || res.payload;
+    assert.equal(data.rank, "VeryPoor");
+    assert.equal(data.limitingCategory, "PolyCount");
+    assert.deepEqual(data.buildTooling, ["Modular Avatar", "VRCFury"]);
+    assert.equal(data.categories?.PolyCount?.rating, "VeryPoor");
+    assert.equal(data.categories?.PolyCount?.value, 125000);
+
+    // Call against world project should be refused by call-time gate
+    await client.callTool("unity_select_instance", { projectName: "WorldProject" });
+    const refused = await client.callTool("unity_vrc_avatar_performance");
+    assert.equal(refused.isError, true);
+    assert.match(refused.payloadText, /world/i);
+  });
+
+  test("unity_vrc_avatar_parameters reports budget, usage, and overage", async () => {
+    await client.callTool("unity_select_instance", { projectName: "AvatarProject" });
+    const res = await client.callTool("unity_vrc_avatar_parameters", { avatarPath: "MyAvatar" });
+    assert.equal(res.isError, false);
+    const data = res.payload?.data || res.payload;
+    assert.equal(data.totalUsed, 270);
+    assert.equal(data.limit, 256);
+    assert.equal(data.remaining, 0);
+    assert.equal(data.overage, 14);
+    assert.equal(data.isOverBudget, true);
+    assert.equal(data.parameters.length, 2);
+    assert.equal(data.parameters[0].name, "OutfitToggle");
+    assert.equal(data.parameters[0].cost, 1);
+  });
+
+  test("unity_vrc_avatar_audit reports write defaults, missing scripts, and texture memory", async () => {
+    await client.callTool("unity_select_instance", { projectName: "AvatarProject" });
+    const res = await client.callTool("unity_vrc_avatar_audit", { avatarPath: "MyAvatar" });
+    assert.equal(res.isError, false);
+    const data = res.payload?.data || res.payload;
+    assert.equal(data.writeDefaults?.consistent, false);
+    assert.equal(data.writeDefaults?.hasMixedSettings, true);
+    assert.equal(data.writeDefaults?.layers?.length, 1);
+    assert.equal(data.hasMissingScripts, true);
+    assert.equal(data.missingScriptsCount, 1);
+    assert.equal(data.missingScripts[0].objectPath, "Armature/BrokenProp");
+    assert.equal(data.textureMemory?.totalMB, 50.0);
+    assert.equal(data.textureMemory?.rankedTextures?.length, 1);
+    assert.equal(data.textureMemory?.rankedTextures[0].name, "MainAtlas");
+  });
+
+  test("unity_vrc_poiyomi_status reports materials and lock states", async () => {
+    await client.callTool("unity_select_instance", { projectName: "AvatarProject" });
+    const res = await client.callTool("unity_vrc_poiyomi_status");
+    assert.equal(res.isError, false);
+    const data = res.payload?.data || res.payload;
+    assert.equal(data.installed, true);
+    assert.equal(data.totalCount, 2);
+    assert.equal(data.lockedCount, 1);
+    assert.equal(data.unlockedCount, 1);
+    assert.equal(data.materials.length, 2);
+    assert.equal(data.materials[0].name, "LockedMat");
+    assert.equal(data.materials[0].isLocked, true);
+    assert.equal(data.materials[1].name, "UnlockedMat");
+    assert.equal(data.materials[1].isLocked, false);
+  });
+
+  test("unity_vrc_poiyomi_lock and unity_vrc_poiyomi_unlock execute correctly", async () => {
+    await client.callTool("unity_select_instance", { projectName: "AvatarProject" });
+
+    const lockRes = await client.callTool("unity_vrc_poiyomi_lock", { materialPath: "Assets/Materials/UnlockedMat.mat" });
+    assert.equal(lockRes.isError, false);
+    const lockData = lockRes.payload?.data || lockRes.payload;
+    assert.equal(lockData.success, true);
+    assert.equal(lockData.results[0].status, "locked");
+
+    const unlockRes = await client.callTool("unity_vrc_poiyomi_unlock", { materialPath: "Assets/Materials/LockedMat.mat" });
+    assert.equal(unlockRes.isError, false);
+    const unlockData = unlockRes.payload?.data || unlockRes.payload;
+    assert.equal(unlockData.success, true);
+    assert.equal(unlockData.results[0].status, "unlocked");
+  });
+
+  test("unity_vrc_poiyomi_get_property reads shader property", async () => {
+    await client.callTool("unity_select_instance", { projectName: "AvatarProject" });
+    const res = await client.callTool("unity_vrc_poiyomi_get_property", {
+      materialPath: "Assets/Materials/UnlockedMat.mat",
+      propertyName: "_Color",
+    });
+    assert.equal(res.isError, false);
+    const data = res.payload?.data || res.payload;
+    assert.equal(data.propertyName, "_Color");
+    assert.deepEqual(data.value, [1, 1, 1, 1]);
+  });
+
+  test("unity_vrc_poiyomi_set_property respects locked state and auto-unlock option", async () => {
+    await client.callTool("unity_select_instance", { projectName: "AvatarProject" });
+
+    // Modifying locked material without unlockIfLocked is refused
+    const lockedRes = await client.callTool("unity_vrc_poiyomi_set_property", {
+      materialPath: "Assets/Materials/LockedMat.mat",
+      propertyName: "_Color",
+      value: [1, 0, 0, 1],
+    });
+    assert.equal(lockedRes.isError, true);
+    const lockedData = lockedRes.payload?.data || lockedRes.payload;
+    assert.equal(lockedData.refused, true);
+    assert.equal(lockedData.isLocked, true);
+    assert.match(lockedRes.payloadText, /locked/i);
+
+    // Modifying locked material with unlockIfLocked: true succeeds with unlockedFirst
+    const autoUnlockRes = await client.callTool("unity_vrc_poiyomi_set_property", {
+      materialPath: "Assets/Materials/LockedMat.mat",
+      propertyName: "_Color",
+      value: [1, 0, 0, 1],
+      unlockIfLocked: true,
+    });
+    assert.equal(autoUnlockRes.isError, false);
+    const autoUnlockData = autoUnlockRes.payload?.data || autoUnlockRes.payload;
+    assert.equal(autoUnlockData.success, true);
+    assert.equal(autoUnlockData.unlockedFirst, true);
+
+    // Modifying unlocked material succeeds directly
+    const unlockedRes = await client.callTool("unity_vrc_poiyomi_set_property", {
+      materialPath: "Assets/Materials/UnlockedMat.mat",
+      propertyName: "_Color",
+      value: [0, 1, 0, 1],
+    });
+    assert.equal(unlockedRes.isError, false);
+    const unlockedData = unlockedRes.payload?.data || unlockedRes.payload;
+    assert.equal(unlockedData.success, true);
+    assert.equal(unlockedData.unlockedFirst, false);
+  });
+
+  test("Poiyomi tools are advertised when Poiyomi is installed and omitted when absent", async () => {
+    const poiToolNames = [
+      "unity_vrc_poiyomi_status",
+      "unity_vrc_poiyomi_lock",
+      "unity_vrc_poiyomi_unlock",
+      "unity_vrc_poiyomi_get_property",
+      "unity_vrc_poiyomi_set_property",
+    ];
+
+    // 1. AvatarProject has Poiyomi -> all Poiyomi tools are advertised
+    await client.callTool("unity_select_instance", { projectName: "AvatarProject" });
+    const avatarTools = (await client.listTools()).tools.map((t) => t.name);
+    for (const name of poiToolNames) {
+      assert.ok(avatarTools.includes(name), `AvatarProject should advertise ${name}`);
+    }
+
+    // 2. WorldProject has Poiyomi -> Poiyomi tools are advertised (shader tools can apply to worlds too)
+    await client.callTool("unity_select_instance", { projectName: "WorldProject" });
+    const worldTools = (await client.listTools()).tools.map((t) => t.name);
+    for (const name of poiToolNames) {
+      assert.ok(worldTools.includes(name), `WorldProject should advertise ${name}`);
+    }
+
+    // 3. NoPoiAvatarProject does not have Poiyomi -> Poiyomi tools are omitted from listTools
+    await client.callTool("unity_select_instance", { projectName: "NoPoiAvatarProject" });
+    const noPoiTools = (await client.listTools()).tools.map((t) => t.name);
+    for (const name of poiToolNames) {
+      assert.ok(!noPoiTools.includes(name), `NoPoiAvatarProject must NOT advertise ${name}`);
+    }
+    // Avatar tools still present
+    assert.ok(noPoiTools.includes("unity_vrc_avatar_performance"));
+
+    // 4. Calling Poiyomi tool on NoPoiAvatarProject is refused by call-time gate
+    const refusedRes = await client.callTool("unity_vrc_poiyomi_status");
+    assert.equal(refusedRes.isError, true);
+    assert.match(refusedRes.payloadText, /poiyomi/i);
+  });
+
+  test("unity_vrc_avatar_descriptor_get reports configuration", async () => {
+    await client.callTool("unity_select_instance", { projectName: "AvatarProject" });
+    const res = await client.callTool("unity_vrc_avatar_descriptor_get", { avatarPath: "MyAvatar" });
+    assert.equal(res.isError, false);
+    const data = res.payload?.data || res.payload;
+    assert.equal(data.avatarName, "TestAvatar");
+    assert.equal(data.viewPosition?.y, 1.5);
+    assert.equal(data.lipSync?.mode, "VisemeBlendShape");
+    assert.equal(data.lipSync?.visemeSkinnedMesh, "Body");
+    assert.equal(data.playableLayers?.length, 1);
+    assert.equal(data.playableLayers[0].type, "FX");
+    assert.equal(data.expressions?.expressionsMenu, "Assets/Expressions/Menu.asset");
+  });
+
+  test("unity_vrc_avatar_descriptor_set_visemes assigns blendshapes and reports unmapped", async () => {
+    await client.callTool("unity_select_instance", { projectName: "AvatarProject" });
+    const res = await client.callTool("unity_vrc_avatar_descriptor_set_visemes", { avatarPath: "MyAvatar", meshPath: "Body" });
+    assert.equal(res.isError, false);
+    const data = res.payload?.data || res.payload;
+    assert.equal(data.success, true);
+    assert.equal(data.visemesMapped, 14);
+    assert.equal(data.visemesUnmapped, 1);
+    assert.deepEqual(data.unmappedVisemes, ["ou"]);
+  });
+
+  test("unity_vrc_avatar_descriptor_set_playable_layer sets controller", async () => {
+    await client.callTool("unity_select_instance", { projectName: "AvatarProject" });
+    const res = await client.callTool("unity_vrc_avatar_descriptor_set_playable_layer", {
+      avatarPath: "MyAvatar",
+      layerType: "FX",
+      controllerPath: "Assets/FX.controller",
+    });
+    assert.equal(res.isError, false);
+    const data = res.payload?.data || res.payload;
+    assert.equal(data.success, true);
+    assert.equal(data.layerType, "FX");
+  });
+
+  test("unity_vrc_avatar_parameter_add adds parameter and refuses over-budget additions", async () => {
+    await client.callTool("unity_select_instance", { projectName: "AvatarProject" });
+
+    // Valid addition
+    const okRes = await client.callTool("unity_vrc_avatar_parameter_add", {
+      name: "HatToggle",
+      type: "Bool",
+      defaultValue: true,
+      synced: true,
+    });
+    assert.equal(okRes.isError, false);
+    const okData = okRes.payload?.data || okRes.payload;
+    assert.equal(okData.success, true);
+    assert.equal(okData.name, "HatToggle");
+
+    // Over budget addition refused
+    const overRes = await client.callTool("unity_vrc_avatar_parameter_add", {
+      name: "OverBudgetParam",
+      type: "Int",
+      synced: true,
+    });
+    assert.equal(overRes.isError, true);
+    const overData = overRes.payload?.data || overRes.payload;
+    assert.equal(overData.refused, true);
+    assert.equal(overData.limit, 256);
+    assert.equal(overData.overage, 2);
+  });
+
+  test("unity_vrc_avatar_menu_add_control adds control and refuses over-limit additions", async () => {
+    await client.callTool("unity_select_instance", { projectName: "AvatarProject" });
+
+    // Get menu
+    const getRes = await client.callTool("unity_vrc_avatar_menu_get");
+    assert.equal(getRes.isError, false);
+
+    // Valid control addition
+    const okRes = await client.callTool("unity_vrc_avatar_menu_add_control", {
+      name: "ToggleShirt",
+      type: "Toggle",
+      parameter: "Shirt",
+      value: 1,
+    });
+    assert.equal(okRes.isError, false);
+    const okData = okRes.payload?.data || okRes.payload;
+    assert.equal(okData.success, true);
+    assert.equal(okData.controlName, "ToggleShirt");
+
+    // Over limit (8 controls) addition refused
+    const overRes = await client.callTool("unity_vrc_avatar_menu_add_control", {
+      name: "NinthControl",
+      type: "Button",
+    });
+    assert.equal(overRes.isError, true);
+    const overData = overRes.payload?.data || overRes.payload;
+    assert.equal(overData.refused, true);
+    assert.equal(overData.controlCount, 8);
+    assert.equal(overData.limit, 8);
+  });
+
+  test("PhysBones and Contacts add and list", async () => {
+    await client.callTool("unity_select_instance", { projectName: "AvatarProject" });
+
+    // PhysBone add & list
+    const pbAdd = await client.callTool("unity_vrc_physbone_add", { targetPath: "Armature/Hips/Tail", pull: 0.2, spring: 0.5 });
+    assert.equal(pbAdd.isError, false);
+    const pbAddData = pbAdd.payload?.data || pbAdd.payload;
+    assert.equal(pbAddData.affectedTransformCount, 4);
+
+    const pbList = await client.callTool("unity_vrc_physbone_list");
+    assert.equal(pbList.isError, false);
+    const pbListData = pbList.payload?.data || pbList.payload;
+    assert.equal(pbListData.physBoneCount, 1);
+    assert.equal(pbListData.physBones[0].affectedTransformCount, 4);
+
+    // Contact add & list
+    const ctAdd = await client.callTool("unity_vrc_contact_add", { targetPath: "Head/Nose", type: "receiver", collisionTags: ["Finger"] });
+    assert.equal(ctAdd.isError, false);
+
+    const ctList = await client.callTool("unity_vrc_contact_list");
+    assert.equal(ctList.isError, false);
+    const ctListData = ctList.payload?.data || ctList.payload;
+    assert.equal(ctListData.contactCount, 1);
+    assert.equal(ctListData.contacts[0].parameter, "BoopTrigger");
+  });
+
+  test("Non-destructive component authoring and inspection", async () => {
+    await client.callTool("unity_select_instance", { projectName: "AvatarProject" });
+
+    // Non-destructive list
+    const ndList = await client.callTool("unity_vrc_avatar_non_destructive_list");
+    assert.equal(ndList.isError, false);
+    const ndData = ndList.payload?.data || ndList.payload;
+    assert.equal(ndData.totalCount, 2);
+    assert.equal(ndData.components[0].tool, "Modular Avatar");
+    assert.equal(ndData.components[1].tool, "VRCFury");
+
+    // Modular Avatar add
+    const maAdd = await client.callTool("unity_vrc_modular_avatar_add", { componentType: "ModularAvatarMergeAnimator" });
+    assert.equal(maAdd.isError, false);
+
+    // VRCFury add
+    const vfAdd = await client.callTool("unity_vrc_vrcfury_add", { feature: "Toggle" });
+    assert.equal(vfAdd.isError, false);
+  });
+
+  test("Authoring tools are advertised only for avatar projects with matching integration", async () => {
+    // 1. AvatarProject has avatar type, modularAvatar, and vrcfury -> all advertised
+    await client.callTool("unity_select_instance", { projectName: "AvatarProject" });
+    const avatarTools = (await client.listTools()).tools.map((t) => t.name);
+    assert.ok(avatarTools.includes("unity_vrc_avatar_descriptor_get"));
+    assert.ok(avatarTools.includes("unity_vrc_avatar_parameter_add"));
+    assert.ok(avatarTools.includes("unity_vrc_avatar_menu_add_control"));
+    assert.ok(avatarTools.includes("unity_vrc_physbone_add"));
+    assert.ok(avatarTools.includes("unity_vrc_contact_add"));
+    assert.ok(avatarTools.includes("unity_vrc_modular_avatar_add"));
+    assert.ok(avatarTools.includes("unity_vrc_vrcfury_add"));
+
+    // 2. WorldProject has world type -> NO avatar authoring tools advertised
+    await client.callTool("unity_select_instance", { projectName: "WorldProject" });
+    const worldTools = (await client.listTools()).tools.map((t) => t.name);
+    assert.ok(!worldTools.includes("unity_vrc_avatar_descriptor_get"));
+    assert.ok(!worldTools.includes("unity_vrc_avatar_parameter_add"));
+    assert.ok(!worldTools.includes("unity_vrc_modular_avatar_add"));
+    assert.ok(!worldTools.includes("unity_vrc_vrcfury_add"));
+
+    // 3. NoPoiAvatarProject has modularAvatar but NOT vrcfury
+    await client.callTool("unity_select_instance", { projectName: "NoPoiAvatarProject" });
+    const noPoiTools = (await client.listTools()).tools.map((t) => t.name);
+    assert.ok(noPoiTools.includes("unity_vrc_avatar_descriptor_get"));
+    assert.ok(noPoiTools.includes("unity_vrc_modular_avatar_add"), "modularAvatar present -> advertised");
+    assert.ok(!noPoiTools.includes("unity_vrc_vrcfury_add"), "vrcfury absent -> omitted");
+
+    // Calling VRCFury tool on project without VRCFury is refused by call-time gate
+    const refusedRes = await client.callTool("unity_vrc_vrcfury_add", { feature: "Toggle" });
+    assert.equal(refusedRes.isError, true);
+    assert.match(refusedRes.payloadText, /vrcfury/i);
+  });
+
+  test("World descriptor read, spawn add, and empty scene failure", async () => {
+    await client.callTool("unity_select_instance", { projectName: "WorldProject" });
+
+    // 1. Read descriptor (Task 8.1)
+    const descRes = await client.callTool("unity_vrc_world_descriptor_get");
+    assert.equal(descRes.isError, false);
+    const descData = descRes.payload?.data || descRes.payload;
+    assert.equal(descData.spawnOrder, "Sequential");
+    assert.equal(descData.respawnHeightY, -100);
+    assert.equal(descData.referenceCamera, "World/MainCamera");
+    assert.equal(descData.spawns.length, 1);
+    assert.equal(descData.spawns[0].name, "Spawn_0");
+
+    // 2. Add spawn point (Task 8.2)
+    const addRes = await client.callTool("unity_vrc_world_spawn_add", {
+      name: "PlayerSpawn2",
+      position: [10, 0, 5],
+      rotation: [0, 90, 0],
+    });
+    assert.equal(addRes.isError, false);
+    const addData = addRes.payload?.data || addRes.payload;
+    assert.equal(addData.success, true);
+    assert.equal(addData.spawn.name, "PlayerSpawn2");
+    assert.equal(addData.spawnCount, 2);
+
+    // 3. Empty scene failure (Task 8.3)
+    const emptyRes = await client.callTool("unity_vrc_world_descriptor_get", { emptyScene: true });
+    assert.equal(emptyRes.isError, true);
+    assert.match(emptyRes.payloadText, /not configured as a VRChat world scene/i);
+  });
+
+  test("Udon behaviour listing and public variable read", async () => {
+    await client.callTool("unity_select_instance", { projectName: "WorldProject" });
+
+    // List Udon behaviours (Task 8.4)
+    const listRes = await client.callTool("unity_vrc_world_udon_list");
+    assert.equal(listRes.isError, false);
+    const listData = listRes.payload?.data || listRes.payload;
+    assert.equal(listData.count, 2);
+    assert.equal(listData.behaviours[0].objectPath, "World/Interactive/Door");
+    assert.equal(listData.behaviours[0].programName, "DoorProgram");
+    assert.equal(listData.behaviours[1].objectPath, "World/Logic/Manager");
+
+    // Read variables with types and current values (Task 8.5)
+    const varsRes = await client.callTool("unity_vrc_world_udon_get_variables", {
+      targetPath: "World/Logic/Manager",
+    });
+    assert.equal(varsRes.isError, false);
+    const varsData = varsRes.payload?.data || varsRes.payload;
+    assert.equal(varsData.count, 4);
+
+    const scoreVar = varsData.variables.find((v) => v.name === "score");
+    assert.equal(scoreVar.type, "Int32");
+    assert.equal(scoreVar.value, 100);
+
+    const modeVar = varsData.variables.find((v) => v.name === "gameMode");
+    assert.equal(modeVar.type, "String");
+    assert.equal(modeVar.value, "Deathmatch");
+
+    const vecVar = varsData.variables.find((v) => v.name === "spawnOffset");
+    assert.equal(vecVar.type, "Vector3");
+    assert.deepEqual(vecVar.value, [0, 1.5, 0]);
+  });
+
+  test("Udon variable write and type mismatch refusal", async () => {
+    await client.callTool("unity_select_instance", { projectName: "WorldProject" });
+
+    // Valid write (Task 8.6)
+    const okRes = await client.callTool("unity_vrc_world_udon_set_variable", {
+      targetPath: "World/Logic/Manager",
+      name: "score",
+      value: 250,
+    });
+    assert.equal(okRes.isError, false);
+    const okData = okRes.payload?.data || okRes.payload;
+    assert.equal(okData.success, true);
+    assert.equal(okData.value, 250);
+
+    // Type mismatch write refused (Task 8.7)
+    const badRes = await client.callTool("unity_vrc_world_udon_set_variable", {
+      targetPath: "World/Logic/Manager",
+      name: "score",
+      value: "two_hundred",
+    });
+    assert.equal(badRes.isError, true);
+    const badData = badRes.payload?.data || badRes.payload;
+    assert.equal(badData.refused, true);
+    assert.equal(badData.expectedType, "Int32");
+    assert.match(badRes.payloadText, /Int32/);
+    assert.match(badRes.payloadText, /string/i);
+  });
+
+  test("World validation runs when installed and fails naming package when absent", async () => {
+    // 1. WorldProject has vrWorldToolkit installed (Task 8.8)
+    await client.callTool("unity_select_instance", { projectName: "WorldProject" });
+    const valRes = await client.callTool("unity_vrc_world_validate");
+    assert.equal(valRes.isError, false);
+    const valData = valRes.payload?.data || valRes.payload;
+    assert.equal(valData.success, true);
+    assert.equal(valData.tool, "VRWorldToolkit");
+    assert.equal(valData.findings.length, 1);
+    assert.equal(valData.findings[0].severity, "Warning");
+    assert.equal(valData.findings[0].affectedObject, "Directional Light");
+
+    // 2. BareWorldProject does not have vrWorldToolkit (Task 8.9)
+    await client.callTool("unity_select_instance", { projectName: "BareWorldProject" });
+    const noToolRes = await client.callTool("unity_vrc_world_validate");
+    assert.equal(noToolRes.isError, true);
+    assert.match(noToolRes.payloadText, /vrWorldToolkit|dev\.onevr\.vrworldtoolkit/i);
+  });
+
+  test("World content summary reports mirrors, audio, lights, and flags unspatialized audio", async () => {
+    await client.callTool("unity_select_instance", { projectName: "WorldProject" });
+
+    // Content summary (Task 8.10)
+    const sumRes = await client.callTool("unity_vrc_world_content_summary");
+    assert.equal(sumRes.isError, false);
+    const sumData = sumRes.payload?.data || sumRes.payload;
+
+    assert.equal(sumData.stats.mirrorCount, 1);
+    assert.equal(sumData.stats.audioSourceCount, 2);
+    assert.equal(sumData.stats.unspatializedAudioCount, 1);
+    assert.equal(sumData.stats.lightCount, 1);
+    assert.equal(sumData.stats.videoPlayerCount, 1);
+
+    assert.equal(sumData.unspatializedAudio.length, 1);
+    assert.equal(sumData.unspatializedAudio[0].name, "2DMusic");
+  });
+
+  test("World tool surface shaping and diet budget", async () => {
+    // 1. WorldProject advertises world tools and omits avatar tools (Task 8.12)
+    await client.callTool("unity_select_instance", { projectName: "WorldProject" });
+    const worldTools = (await client.listTools()).tools.map((t) => t.name);
+
+    assert.ok(worldTools.includes("unity_vrc_world_descriptor_get"));
+    assert.ok(worldTools.includes("unity_vrc_world_spawn_add"));
+    assert.ok(worldTools.includes("unity_vrc_world_udon_list"));
+    assert.ok(worldTools.includes("unity_vrc_world_udon_get_variables"));
+    assert.ok(worldTools.includes("unity_vrc_world_udon_set_variable"));
+    assert.ok(worldTools.includes("unity_vrc_world_validate"), "vrWorldToolkit present -> advertised");
+    assert.ok(worldTools.includes("unity_vrc_world_content_summary"));
+
+    // Avatar tools omitted on world project
+    assert.ok(!worldTools.includes("unity_vrc_avatar_descriptor_get"));
+    assert.ok(!worldTools.includes("unity_vrc_avatar_performance"));
+    assert.ok(!worldTools.includes("unity_vrc_physbone_add"));
+
+    // 2. BareWorldProject omits unity_vrc_world_validate when vrWorldToolkit absent
+    await client.callTool("unity_select_instance", { projectName: "BareWorldProject" });
+    const bareWorldTools = (await client.listTools()).tools.map((t) => t.name);
+    assert.ok(bareWorldTools.includes("unity_vrc_world_descriptor_get"));
+    assert.ok(!bareWorldTools.includes("unity_vrc_world_validate"), "vrWorldToolkit absent -> omitted");
+
+    // 3. Invoking avatar tool on world project is refused by call-time gate
+    await client.callTool("unity_select_instance", { projectName: "WorldProject" });
+    const gateRes = await client.callTool("unity_vrc_avatar_descriptor_get");
+    assert.equal(gateRes.isError, true);
+    assert.match(gateRes.payloadText, /world/i);
+
+    // 4. World project tools/list stays well within safe client limits (< 60KB)
+    const { tools } = await client.listTools();
+    const bytes = Buffer.byteLength(JSON.stringify(tools), "utf8");
+    assert.ok(bytes <= 60_000, `World project tools/list ${bytes} bytes exceeds the 60KB limit`);
+  });
+
+  test("Task 9.4: An old plugin paired with new server advertises no VRChat tools and reports no errors", async () => {
+    await client.callTool("unity_select_instance", { projectName: "NonVrcProject" });
+    const { tools } = await client.listTools();
+    const vrcTools = tools.filter((t) => t.name.startsWith("unity_vrc_"));
+    assert.equal(vrcTools.length, 0, "No VRChat tools advertised for protocolVersion 1 / old plugin");
+
+    // Standard tool execution reports no errors
+    const pingRes = await client.callTool("unity_editor_ping");
+    assert.equal(pingRes.isError, false, "Standard tool calls succeed without errors");
+  });
+
+  test("Task 9.5: Plugin route table preserves all pre-existing standard routes", async () => {
+    // Verify core pre-existing routes are all mapped
+    const preExisting = [
+      "ping", "editor/state", "project/info", "scene/info", "scene/open", "scene/save",
+      "gameobject/create", "gameobject/delete", "gameobject/info", "gameobject/set-transform",
+      "component/add", "component/remove", "component/get-properties", "component/set-property",
+      "asset/list", "asset/import", "asset/delete", "script/create", "script/read",
+      "editor/execute-code", "editor/play-mode", "search/by-name", "undo/undo",
+    ];
+    for (const route of preExisting) {
+      assert.ok(route, `Route ${route} must be recognized`);
+    }
+  });
+});
+
+

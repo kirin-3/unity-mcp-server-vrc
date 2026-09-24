@@ -1,4 +1,4 @@
-﻿// AnkleBreaker Unity MCP â€” Tool definitions for Unity Editor operations (via HTTP bridge)
+// AnkleBreaker Unity MCP â€” Tool definitions for Unity Editor operations (via HTTP bridge)
 import * as bridge from "../unity-editor-bridge.js";
 import { formatResult, looksLikeErrorObject } from "../response-format.js";
 import { isUnknownRouteResult } from "../capabilities.js";
@@ -550,7 +550,7 @@ export const editorTools = [
   // â”€â”€â”€ Build â”€â”€â”€
   {
     name: "unity_build",
-    description: "Start a build of the Unity project for a target platform.",
+    description: "Start a build of the Unity project for a target platform. Refused on VRChat projects unless 'override: true' is passed.",
     inputSchema: {
       type: "object",
       properties: {
@@ -566,6 +566,7 @@ export const editorTools = [
           description: "Scene paths to include (default: scenes in build settings)",
         },
         developmentBuild: { type: "boolean", description: "Enable development build (default: false)" },
+        override: { type: "boolean", description: "Override VRChat safety guard (default: false)" },
       },
       required: ["target", "outputPath"],
     },
@@ -1495,7 +1496,7 @@ export const editorTools = [
   },
   {
     name: "unity_physics_set_collision_layer",
-    description: "Set whether two physics layers should collide or ignore each other.",
+    description: "Set whether two physics layers should collide or ignore each other. Reserved layers (0–22) are guarded on VRChat projects unless 'override: true'.",
     inputSchema: {
       type: "object",
       properties: {
@@ -1504,6 +1505,7 @@ export const editorTools = [
         layer1Name: { type: "string", description: "First layer name (alternative to index)" },
         layer2Name: { type: "string", description: "Second layer name (alternative to index)" },
         ignore: { type: "boolean", description: "If true, layers will ignore each other (default: true)" },
+        override: { type: "boolean", description: "Override VRChat safety guard (default: false)" },
       },
     },
     handler: async (params) => formatResult(await bridge.setCollisionLayer(params)),
@@ -1669,7 +1671,7 @@ export const editorTools = [
   },
   {
     name: "unity_taglayer_set_layer",
-    description: "Assign a layer to a GameObject, optionally including children.",
+    description: "Assign a layer to a GameObject, optionally including children. Reserved layers (0–22) are guarded on VRChat projects unless 'override: true'.",
     inputSchema: {
       type: "object",
       properties: {
@@ -1678,6 +1680,7 @@ export const editorTools = [
         layer: { type: "integer", description: "Layer index (0-31)" },
         layerName: { type: "string", description: "Layer name (alternative to index)" },
         includeChildren: { type: "boolean", description: "Apply to all children recursively" },
+        override: { type: "boolean", description: "Override VRChat safety guard (default: false)" },
       },
     },
     handler: async (params) => formatResult(await bridge.setLayer(params)),
@@ -2752,11 +2755,12 @@ export const editorTools = [
   },
   {
     name: "unity_settings_set_quality_level",
-    description: "Set the active quality level by name or index.",
+    description: "Set the active quality level by name or index. Refused on VRChat projects unless 'override: true' is passed.",
     inputSchema: {
       type: "object",
       properties: {
         level: { type: "string", description: "Quality level name (e.g. 'Ultra', 'High') or index (e.g. '0', '3')" },
+        override: { type: "boolean", description: "Override VRChat safety guard (default: false)" },
       },
       required: ["level"],
     },
@@ -2770,7 +2774,7 @@ export const editorTools = [
   },
   {
     name: "unity_settings_set_physics",
-    description: "Modify physics settings like gravity, solver iterations, sleep threshold, etc.",
+    description: "Modify physics settings like gravity, solver iterations, sleep threshold, etc. Refused on VRChat projects unless 'override: true' is passed.",
     inputSchema: {
       type: "object",
       properties: {
@@ -2780,6 +2784,7 @@ export const editorTools = [
         bounceThreshold: { type: "number", description: "Velocity threshold for bouncing" },
         defaultContactOffset: { type: "number", description: "Default contact offset" },
         queriesHitTriggers: { type: "boolean", description: "Whether raycasts hit trigger colliders" },
+        override: { type: "boolean", description: "Override VRChat safety guard (default: false)" },
       },
     },
     handler: async (params) => formatResult(await bridge.setPhysicsSettings(params)),
@@ -2811,7 +2816,7 @@ export const editorTools = [
   },
   {
     name: "unity_settings_set_player",
-    description: "Modify player settings like company name, product name, bundle version, run in background.",
+    description: "Modify player settings like company name, product name, bundle version, run in background. Refused on VRChat projects unless 'override: true' is passed.",
     inputSchema: {
       type: "object",
       properties: {
@@ -2819,6 +2824,7 @@ export const editorTools = [
         productName: { type: "string", description: "Product/game name" },
         bundleVersion: { type: "string", description: "Version string (e.g. '1.0.0')" },
         runInBackground: { type: "boolean", description: "Run in background when unfocused" },
+        override: { type: "boolean", description: "Override VRChat safety guard (default: false)" },
       },
     },
     handler: async (params) => formatResult(await bridge.setPlayerSettings(params)),

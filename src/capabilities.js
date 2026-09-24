@@ -14,6 +14,8 @@ export const PLUGIN_FEATURES = {
   // protocolVersion 1: handshake baseline — ping advertises versions,
   // unknown routes return HTTP 404 on the legacy path.
   UNKNOWN_ROUTE_404: 1,
+  // protocolVersion 2: VRChat routes and project-context support.
+  VRCHAT_ROUTES: 2,
 };
 
 /**
