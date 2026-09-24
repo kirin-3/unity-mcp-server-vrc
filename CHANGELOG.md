@@ -30,6 +30,7 @@ Companion to plugin **2.41.0**: VRChat authoring v2. The new tools need plugin p
 - Updating the Unity plugin while the server runs is picked up on the next call: the server refreshes the instance's protocol version and sends `tools/list_changed`. Before, the old protocol version was used until the instance was selected again.
 - `imageResultBlocks` moved from `editor-tools.js` to `response-format.js` so VRChat tools can return images.
 - With plugin 2.41.0, avatar analysis (`unity_vrc_avatar_performance`, `_parameters`, `_audit`) never waits on a modal dialog when a build hook fails. It returns the hook's error, and it deletes its NDMF build files afterwards.
+- With plugin 2.41.0, `unity_vrc_avatar_parameter_add` no longer refuses a parameter that takes the asset past 256 bits. It checked the authored asset, which is not what uploads: VRCFury's Parameter Compressor fits an over-256 asset at build, so the refusal blocked valid parameters. It still reports the authored total. `unity_vrc_avatar_parameters` measures the built avatar.
 - Advertised catalog: 80 tools on a non-VRChat project (unchanged), up to 109 on an avatar project, up to 96 on a world project (388 tools in total). The avatar list is about 68 KB; a new test caps it at 75 KB.
 
 ### Not included

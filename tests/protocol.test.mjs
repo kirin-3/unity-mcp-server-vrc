@@ -988,29 +988,15 @@ describe("VRChat project detection and surface shaping (mock bridge)", () => {
       isDefault: false,
     }));
 
-    bridgeAvatar.on("vrc/avatar/parameters/create", (p) => {
-      if (p.name === "OverBudgetParam") {
-        return {
-          success: false,
-          refused: true,
-          limit: 256,
-          currentUsed: 250,
-          paramCost: 8,
-          overage: 2,
-          error: "Adding parameter 'OverBudgetParam' (8 bits) would exceed the 256-bit memory limit by 2 bits. Parameters asset was unchanged.",
-        };
-      }
-      return {
-        success: true,
-        refused: false,
-        name: p.name,
-        type: p.type || "Bool",
-        cost: p.type === "Int" ? 8 : 1,
-        totalUsed: 10,
-        limit: 256,
-        remaining: 246,
-      };
-    });
+    bridgeAvatar.on("vrc/avatar/parameters/create", (p) => ({
+      success: true,
+      name: p.name,
+      type: p.type || "Bool",
+      cost: p.type === "Int" ? 8 : 1,
+      totalUsed: 10,
+      limit: 256,
+      remaining: 246,
+    }));
 
     bridgeAvatar.on("vrc/avatar/menu/get", () => ({
       menuName: "RootMenu",
@@ -1777,10 +1763,9 @@ describe("VRChat project detection and surface shaping (mock bridge)", () => {
     assert.equal(data.layerType, "FX");
   });
 
-  test("unity_vrc_avatar_parameter_add adds parameter and refuses over-budget additions", async () => {
+  test("unity_vrc_avatar_parameter_add adds parameter", async () => {
     await client.callTool("unity_select_instance", { projectName: "AvatarProject" });
 
-    // Valid addition
     const okRes = await client.callTool("unity_vrc_avatar_parameter_add", {
       name: "HatToggle",
       type: "Bool",
@@ -1791,18 +1776,6 @@ describe("VRChat project detection and surface shaping (mock bridge)", () => {
     const okData = okRes.payload?.data || okRes.payload;
     assert.equal(okData.success, true);
     assert.equal(okData.name, "HatToggle");
-
-    // Over budget addition refused
-    const overRes = await client.callTool("unity_vrc_avatar_parameter_add", {
-      name: "OverBudgetParam",
-      type: "Int",
-      synced: true,
-    });
-    assert.equal(overRes.isError, true);
-    const overData = overRes.payload?.data || overRes.payload;
-    assert.equal(overData.refused, true);
-    assert.equal(overData.limit, 256);
-    assert.equal(overData.overage, 2);
   });
 
   test("unity_vrc_avatar_menu_add_control adds control and refuses over-limit additions", async () => {

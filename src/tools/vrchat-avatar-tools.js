@@ -162,7 +162,8 @@ export const vrchatAvatarTools = [
   },
   {
     name: "unity_vrc_avatar_parameter_add",
-    description: "Add or modify an expression parameter with 256-bit synced memory limit validation.",
+    description:
+      "Add or modify an expression parameter. Reports the authored asset's synced bit total but never refuses over 256: VRCFury's Parameter Compressor can fit it at build. Use unity_vrc_avatar_parameters for the built avatar's real total.",
     vrchatProjectType: "avatar",
     inputSchema: {
       type: "object",

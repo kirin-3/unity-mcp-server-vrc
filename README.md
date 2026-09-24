@@ -14,7 +14,7 @@ For the full list of Unity tools, see the [upstream README](https://github.com/A
 
 - **39 VRChat tools (`unity_vrc_*`)**
   - **Avatar analysis:** performance rank against PC and Quest limits, the 256-bit synced parameter budget, and an audit of the baked avatar: Write Defaults, missing scripts, texture memory, animation paths that no longer resolve, mesh bounds, and Anchor Overrides.
-  - **Avatar authoring:** descriptor inspection, viseme auto-mapping, playable layers, expression parameters that refuse to go over budget, expression menus that respect the 8-control limit, PhysBones, contacts, Modular Avatar and VRCFury components.
+  - **Avatar authoring:** descriptor inspection, viseme auto-mapping, playable layers, expression parameters, expression menus that respect the 8-control limit, PhysBones, contacts, Modular Avatar and VRCFury components.
   - **VRCFury features:** create or update a Toggle (objects, blendshapes, material swaps, menu path, saved, default) and Armature Link.
   - **Outfits:** attach a clothing prefab with MA Merge Armature or VRCFury Armature Link and get a report of the bones that won't merge.
   - **Play-mode testing:** set parameters and gestures through Gesture Manager or Av3Emulator and get an image of the result, in one call.
