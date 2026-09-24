@@ -759,6 +759,7 @@ describe("VRChat project detection and surface shaping (mock bridge)", () => {
           "nadena.dev.ndmf": "1.5.0",
           "com.vrcfury.vrcfury": "1.900.0",
           "d4rkpl4y3r.d4rkavataroptimizer": "3.8.0",
+          "vrchat.blackstartx.gesture-manager": "3.9.9",
         },
       })
     );
@@ -787,18 +788,19 @@ describe("VRChat project detection and surface shaping (mock bridge)", () => {
       })
     );
 
+    // Avatar and world plugins speak protocol 4 (authoring v2); NoPoi and BareWorld stay on 2.
     bridgeAvatar = new MockBridge({
       instance: {
         projectName: "AvatarProject",
         projectPath: avatarDir,
-        protocolVersion: 2,
+        protocolVersion: 4,
       },
     });
     bridgeWorld = new MockBridge({
       instance: {
         projectName: "WorldProject",
         projectPath: worldDir,
-        protocolVersion: 2,
+        protocolVersion: 4,
       },
     });
     bridgeNonVrc = new MockBridge({
@@ -832,6 +834,8 @@ describe("VRChat project detection and surface shaping (mock bridge)", () => {
         vrcfury: { available: true, version: "1.1429.0" },
         d4rkOptimizer: { available: true, version: "4.6.0" },
         vrWorldToolkit: { available: false, version: null },
+        gestureManager: { available: true, version: "3.9.9" },
+        av3Emulator: { available: false, version: null },
         poiyomi: { available: true, version: "10.0.11" },
       },
     }));
@@ -1115,6 +1119,150 @@ describe("VRChat project detection and surface shaping (mock bridge)", () => {
       objectPath: p.targetPath || "Props/Glasses",
     }));
 
+    // ─── Authoring v2 (plugin protocol 4) ───
+    bridgeAvatar.on("vrc/avatar/vrcfury/toggle", (p) => ({
+      success: true,
+      action: "created",
+      objectPath: p.targetPath || "",
+      menuPath: p.menuPath,
+      toggle: {
+        $type: "Toggle",
+        name: p.menuPath,
+        saved: p.saved === true,
+        state: {
+          actions: (p.objects || []).map((o) => ({
+            $type: "ObjectToggleAction",
+            obj: `${o.path} (GameObject)`,
+            mode: o.mode === "off" ? "TurnOff" : "TurnOn",
+          })),
+        },
+      },
+    }));
+
+    bridgeAvatar.on("vrc/avatar/vrcfury/armature-link", (p) => ({
+      success: true,
+      action: "created",
+      objectPath: p.targetPath,
+      propBone: `${p.targetPath}/Armature/Hips`,
+      linkTo: p.linkTo || "Hips",
+      avatarBone: "Armature/Hips",
+      recursive: true,
+      align: true,
+      boneMatch: { matchedCount: 24, unmatchedCount: 0 },
+    }));
+
+    bridgeAvatar.on("vrc/avatar/outfit/attach", (p) => {
+      if (p.outfitPath === "Assets/Outfits/Broken.prefab") {
+        return { success: false, error: "Modular Avatar setup failed: merge target missing.", rolledBack: true };
+      }
+      return {
+        success: true,
+        method: "modularAvatar",
+        methodReason: "the outfit already carries a Modular Avatar Merge Armature",
+        outfitObjectPath: "Hoodie",
+        instantiatedFrom: p.outfitPath,
+        boneMatch: {
+          matchedCount: 52,
+          unmatchedCount: 2,
+          unmatched: [{ path: "Hoodie/Armature/Hips/Hoodie_Spine.001", subtreeSize: 1, looksLike: "Spine" }],
+          suggestions: ["Bone names end in '.001' where the avatar's do not; set the Merge Armature suffix to '.001'."],
+        },
+      };
+    });
+
+    bridgeAvatar.on("vrc/avatar/blendshapes/list", (p) => ({
+      avatarName: "TestAvatar",
+      meshPath: p.meshPath || "Body",
+      selectedBy: "descriptor viseme mesh",
+      blendShapeCount: 3,
+      blendShapes: [
+        { index: 0, name: "vrc.v_aa", weight: 0 },
+        { index: 1, name: "Smile", weight: 0 },
+        { index: 2, name: "JawOpen", weight: 0 },
+      ],
+      ...(p.faceTracking
+        ? { faceTracking: { detectedStandard: "UnifiedExpressions", standards: { UnifiedExpressions: { found: 1, total: 102, coverage: 0.01 } } } }
+        : {}),
+    }));
+
+    bridgeAvatar.on("vrc/avatar/blendshapes/set", (p) => {
+      const unknown = Object.keys(p.weights || {}).filter((name) => !["Smile", "JawOpen"].includes(name));
+      if (unknown.length > 0) {
+        const errors = unknown.map((name) => `'${name}' is not a blendshape on 'Body' (did you mean Smile?).`);
+        return { success: false, error: `${errors.join(" ")} Nothing was changed.`, errors };
+      }
+      return {
+        success: true,
+        meshPath: "Body",
+        applied: Object.entries(p.weights).map(([name, value]) => ({ name, previous: 0, value })),
+      };
+    });
+
+    // Play mode: Gesture Manager in the scene, attaching one status poll after play starts.
+    // The play request's ticket is evicted by the play-mode domain reload, as in Unity.
+    const playState = { playing: false, polls: 0, values: { Jacket: false, GestureLeft: 0 } };
+    const gestureIndex = { neutral: 0, fist: 1, open: 2 };
+    bridgeAvatar.on("editor/play-mode", (p) => {
+      if (p.action === "play") Object.assign(playState, { playing: true, polls: 0 });
+      if (p.action === "stop") playState.playing = false;
+      return { __evict: true };
+    });
+    bridgeAvatar.on("vrc/avatar/playmode/status", (p) => {
+      const noEmulator = p.avatarPath === "NoEmulatorAvatar";
+      if (!playState.playing) {
+        return {
+          success: true,
+          isPlaying: false,
+          ready: false,
+          emulatorsInScene: noEmulator ? [] : ["GestureManager"],
+          enteringPlayMode: false,
+          compileErrors: false,
+          hint: noEmulator
+            ? "Not in play mode, and the open scene has no active Gesture Manager or Av3Emulator. Add one in edit mode (menu 'Tools/Gesture Manager Emulator' or 'Tools/Avatars 3.0 Emulator/Enable', e.g. with unity_execute_menu_item), then enter play mode."
+            : "Not in play mode. GestureManager will drive the avatar once play mode starts.",
+        };
+      }
+      if (++playState.polls < 2) {
+        return { success: true, isPlaying: true, ready: false, emulatorsInScene: ["GestureManager"], hint: "GestureManager is in the scene and attaches a few frames after play starts; retry shortly." };
+      }
+      const parameters = Object.entries(playState.values).map(([name, value]) => ({
+        name,
+        type: typeof value === "boolean" ? "Bool" : "Int",
+        value,
+      }));
+      return {
+        success: true,
+        isPlaying: true,
+        ready: true,
+        emulator: "GestureManager",
+        avatar: "TestAvatar",
+        parameterCount: parameters.length,
+        parameters: p.names ? parameters.filter((x) => p.names.includes(x.name)) : parameters,
+      };
+    });
+    bridgeAvatar.on("vrc/avatar/playmode/set", (p) => {
+      if (!playState.playing) return { success: false, error: "Not in play mode.", notReady: true };
+      const requests = Object.entries(p.parameters || {});
+      if (p.gestureLeft !== undefined) requests.push(["GestureLeft", gestureIndex[p.gestureLeft] ?? p.gestureLeft]);
+      const unknown = requests.filter(([name]) => !(name in playState.values));
+      if (unknown.length > 0) return { success: false, error: `'${unknown[0][0]}' is not a parameter of 'TestAvatar'. Nothing was changed.` };
+      const applied = requests.map(([name, value]) => {
+        const previous = playState.values[name];
+        playState.values[name] = value;
+        return { name, previous, value };
+      });
+      return { success: true, emulator: "GestureManager", avatar: "TestAvatar", applied };
+    });
+    bridgeAvatar.on("vrc/avatar/playmode/capture", (p) => ({
+      success: true,
+      base64: "iVBORw0KGgoMOCKPNG".repeat(20),
+      width: p.width || 512,
+      height: p.height || 512,
+      view: p.view || "front",
+      avatar: "TestAvatar",
+      isPlaying: playState.playing,
+    }));
+
     bridgeWorld.on("vrc/project-context", () => ({
       projectType: "world",
       sdkVersion: "3.10.5",
@@ -1127,6 +1275,30 @@ describe("VRChat project detection and surface shaping (mock bridge)", () => {
         poiyomi: { available: true, version: "10.0.11" },
       },
     }));
+
+    // UdonSharp: the new behaviour compiles a moment after the script is written.
+    let udonAttachCalls = 0;
+    bridgeWorld.on("vrc/world/udonsharp/create", (p) => ({
+      success: true,
+      scriptPath: p.path,
+      programAssetPath: p.path.replace(/\.cs$/, ".asset"),
+      className: p.path.split("/").pop().replace(/\.cs$/, ""),
+      scriptKept: false,
+      programAssetReused: false,
+      compilePending: true,
+      hint: "Unity compiles the script next; attach it with unity_vrc_udonsharp_attach once compilation has finished.",
+    }));
+    bridgeWorld.on("vrc/world/udonsharp/attach", (p) => {
+      if (p.targetPath === "World/Missing") return { success: false, error: "GameObject 'World/Missing' was not found in the open scene." };
+      if (++udonAttachCalls < 2) return { success: false, error: "Scripts are still compiling. Retry in a few seconds.", pending: true };
+      return {
+        success: true,
+        objectPath: p.targetPath,
+        className: "Door",
+        programAssetPath: p.programAssetPath || "Assets/Scripts/Door.asset",
+        backingUdonBehaviour: true,
+      };
+    });
 
     // Deferred avatar analysis: submit returns a jobId, the job is polled until it finishes.
     let deferredPolls = 0;
@@ -1300,8 +1472,8 @@ describe("VRChat project detection and surface shaping (mock bridge)", () => {
     writeFileSync(
       registryPath,
       JSON.stringify([
-        { port: bridgeAvatar.port, projectName: "AvatarProject", projectPath: avatarDir, protocolVersion: 2, unityVersion: "2022.3.22f1", lastSeen: now },
-        { port: bridgeWorld.port, projectName: "WorldProject", projectPath: worldDir, protocolVersion: 2, unityVersion: "2022.3.22f1", lastSeen: now },
+        { port: bridgeAvatar.port, projectName: "AvatarProject", projectPath: avatarDir, protocolVersion: 4, unityVersion: "2022.3.22f1", lastSeen: now },
+        { port: bridgeWorld.port, projectName: "WorldProject", projectPath: worldDir, protocolVersion: 4, unityVersion: "2022.3.22f1", lastSeen: now },
         { port: bridgeNonVrc.port, projectName: "NonVrcProject", projectPath: "C:/NonVrc", protocolVersion: 1, unityVersion: "2022.3.22f1", lastSeen: now },
         { port: bridgeNoPoi.port, projectName: "NoPoiAvatarProject", projectPath: noPoiDir, protocolVersion: 2, unityVersion: "2022.3.22f1", lastSeen: now },
         { port: bridgeBareWorld.port, projectName: "BareWorldProject", projectPath: bareWorldDir, protocolVersion: 2, unityVersion: "2022.3.22f1", lastSeen: now },
@@ -1906,6 +2078,227 @@ describe("VRChat project detection and surface shaping (mock bridge)", () => {
     const { tools } = await client.listTools();
     const bytes = Buffer.byteLength(JSON.stringify(tools), "utf8");
     assert.ok(bytes <= 60_000, `World project tools/list ${bytes} bytes exceeds the 60KB limit`);
+  });
+
+  // ─── Authoring v2 (plugin protocol 4) ───
+  const AVATAR_V2_TOOLS = [
+    "unity_vrc_vrcfury_toggle",
+    "unity_vrc_vrcfury_armature_link",
+    "unity_vrc_outfit_attach",
+    "unity_vrc_playmode_test",
+    "unity_vrc_blendshapes_list",
+    "unity_vrc_blendshapes_set",
+  ];
+  const WORLD_V2_TOOLS = ["unity_vrc_udonsharp_create", "unity_vrc_udonsharp_attach"];
+  const toolNames = async () => (await client.listTools()).tools.map((t) => t.name);
+
+  test("authoring v2 tools follow the project type and plugin protocol 4", async () => {
+    await client.callTool("unity_select_instance", { projectName: "AvatarProject" });
+    let names = await toolNames();
+    for (const name of AVATAR_V2_TOOLS) assert.ok(names.includes(name), `AvatarProject should advertise ${name}`);
+    for (const name of WORLD_V2_TOOLS) assert.ok(!names.includes(name), `AvatarProject must not advertise ${name}`);
+
+    await client.callTool("unity_select_instance", { projectName: "WorldProject" });
+    names = await toolNames();
+    for (const name of WORLD_V2_TOOLS) assert.ok(names.includes(name), `WorldProject should advertise ${name}`);
+    for (const name of AVATAR_V2_TOOLS) assert.ok(!names.includes(name), `WorldProject must not advertise ${name}`);
+
+    // A protocol-2 plugin cannot answer them: hidden, and a direct call names the protocol it needs.
+    await client.callTool("unity_select_instance", { projectName: "NoPoiAvatarProject" });
+    names = await toolNames();
+    for (const name of AVATAR_V2_TOOLS) assert.ok(!names.includes(name), `protocol-2 plugin must not advertise ${name}`);
+    const refused = await client.callTool("unity_vrc_blendshapes_list");
+    assert.equal(refused.isError, true);
+    assert.match(refused.payloadText, /protocol 4 or later/);
+  });
+
+  test("a plugin updated mid-session is picked up without re-selecting the instance", async () => {
+    await client.callTool("unity_select_instance", { projectName: "NoPoiAvatarProject" });
+    assert.ok(!(await toolNames()).includes("unity_vrc_blendshapes_list"));
+
+    // Updating the plugin reloads Unity on the same port; the next call revalidates the selection.
+    bridgeNoPoi.instance.protocolVersion = 4;
+    try {
+      await client.callTool("unity_vrc_get_project_context");
+      await client.callTool("unity_vrc_get_project_context");
+      assert.ok((await toolNames()).includes("unity_vrc_blendshapes_list"), "protocol 4 tools appear after the update");
+    } finally {
+      bridgeNoPoi.instance.protocolVersion = 2;
+      await client.callTool("unity_vrc_get_project_context");
+    }
+    assert.ok(!(await toolNames()).includes("unity_vrc_blendshapes_list"));
+  });
+
+  test("authoring v2 schemas are explicitly shaped for strict clients", async () => {
+    const violations = [];
+    for (const [project, expected] of [["AvatarProject", AVATAR_V2_TOOLS], ["WorldProject", WORLD_V2_TOOLS]]) {
+      await client.callTool("unity_select_instance", { projectName: project });
+      const { tools } = await client.listTools();
+      for (const tool of tools.filter((t) => expected.includes(t.name))) {
+        for (const [prop, schema] of Object.entries(tool.inputSchema.properties || {})) {
+          collectSchemaViolations(tool.name, prop, schema, violations);
+        }
+      }
+    }
+    assert.deepEqual(violations, [], `${violations.length} loosely-shaped properties`);
+  });
+
+  test("avatar project tools/list stays within a safe client budget", async () => {
+    await client.callTool("unity_select_instance", { projectName: "AvatarProject" });
+    const { tools } = await client.listTools();
+    const bytes = Buffer.byteLength(JSON.stringify(tools), "utf8");
+    console.error(`[gate] avatar project tools/list payload: ${(bytes / 1024).toFixed(1)} KB for ${tools.length} tools`);
+    assert.ok(bytes <= 75_000, `Avatar project tools/list ${bytes} bytes exceeds the 75KB limit`);
+  });
+
+  test("unity_vrc_vrcfury_toggle passes the toggle definition through and returns the feature", async () => {
+    await client.callTool("unity_select_instance", { projectName: "AvatarProject" });
+    const res = await client.callTool("unity_vrc_vrcfury_toggle", {
+      menuPath: "Clothing/Jacket",
+      objects: [{ path: "Jacket" }, { path: "Shirt", mode: "off" }],
+      blendShapes: [{ name: "Shrink_Chest", value: 100 }],
+      saved: true,
+    });
+    assert.equal(res.isError, false, res.payloadText);
+    const data = res.payload?.data || res.payload;
+    assert.equal(data.action, "created");
+    assert.equal(data.toggle.name, "Clothing/Jacket");
+    assert.deepEqual(data.toggle.state.actions.map((a) => a.mode), ["TurnOn", "TurnOff"]);
+
+    const sent = bridgeAvatar.seen.filter((r) => r.route === "vrc/avatar/vrcfury/toggle").at(-1).params;
+    assert.deepEqual(sent.objects, [{ path: "Jacket" }, { path: "Shirt", mode: "off" }]);
+    assert.deepEqual(sent.blendShapes, [{ name: "Shrink_Chest", value: 100 }]);
+    assert.equal(sent.saved, true);
+  });
+
+  test("unity_vrc_vrcfury_armature_link reports the link and bone match", async () => {
+    await client.callTool("unity_select_instance", { projectName: "AvatarProject" });
+    const res = await client.callTool("unity_vrc_vrcfury_armature_link", { targetPath: "Hoodie" });
+    assert.equal(res.isError, false, res.payloadText);
+    const data = res.payload?.data || res.payload;
+    assert.equal(data.linkTo, "Hips");
+    assert.equal(data.boneMatch.unmatchedCount, 0);
+  });
+
+  test("unity_vrc_outfit_attach reports unmatched bones and surfaces a rolled-back failure", async () => {
+    await client.callTool("unity_select_instance", { projectName: "AvatarProject" });
+    const ok = await client.callTool("unity_vrc_outfit_attach", { outfitPath: "Assets/Outfits/Hoodie.prefab" });
+    assert.equal(ok.isError, false, ok.payloadText);
+    const data = ok.payload?.data || ok.payload;
+    assert.equal(data.method, "modularAvatar");
+    assert.equal(data.boneMatch.unmatchedCount, 2);
+    assert.match(data.boneMatch.suggestions[0], /suffix/);
+
+    const failed = await client.callTool("unity_vrc_outfit_attach", { outfitPath: "Assets/Outfits/Broken.prefab" });
+    assert.equal(failed.isError, true);
+    const failedData = failed.payload?.data || failed.payload;
+    assert.equal(failedData.rolledBack, true);
+  });
+
+  test("unity_vrc_blendshapes_list and _set pass through, and a bad name is refused", async () => {
+    await client.callTool("unity_select_instance", { projectName: "AvatarProject" });
+    const list = await client.callTool("unity_vrc_blendshapes_list", { faceTracking: true });
+    assert.equal(list.isError, false, list.payloadText);
+    const listData = list.payload?.data || list.payload;
+    assert.equal(listData.blendShapeCount, 3);
+    assert.equal(listData.faceTracking.detectedStandard, "UnifiedExpressions");
+
+    const set = await client.callTool("unity_vrc_blendshapes_set", { weights: { Smile: 100 } });
+    assert.equal(set.isError, false, set.payloadText);
+    assert.equal((set.payload?.data || set.payload).applied[0].value, 100);
+
+    const bad = await client.callTool("unity_vrc_blendshapes_set", { weights: { Smiel: 100 } });
+    assert.equal(bad.isError, true);
+    assert.match(bad.payloadText, /did you mean Smile/);
+  });
+
+  test("unity_vrc_playmode_test with enterPlayMode:false reports that play mode is needed", async () => {
+    await client.callTool("unity_select_instance", { projectName: "AvatarProject" });
+    const playRequests = () => bridgeAvatar.seen.filter((r) => r.route === "editor/play-mode").length;
+    const before = playRequests();
+    const res = await client.callTool("unity_vrc_playmode_test", { parameters: { Jacket: true }, enterPlayMode: false });
+    assert.equal(res.isError, true);
+    assert.equal(res.payload?.notReady, true);
+    assert.match(res.payloadText, /Not in play mode/);
+    assert.equal(playRequests(), before, "play mode was not entered");
+  });
+
+  test("unity_vrc_playmode_test does not enter play mode when no emulator is in the scene", async () => {
+    await client.callTool("unity_select_instance", { projectName: "AvatarProject" });
+    const playRequests = () => bridgeAvatar.seen.filter((r) => r.route === "editor/play-mode").length;
+    const before = playRequests();
+    const res = await client.callTool("unity_vrc_playmode_test", { avatarPath: "NoEmulatorAvatar", parameters: { Jacket: true } });
+    assert.equal(res.isError, true);
+    assert.match(res.payloadText, /Tools\/Gesture Manager Emulator/);
+    assert.equal(playRequests(), before, "play mode was not entered");
+  });
+
+  test("unity_vrc_playmode_test enters play mode, waits for the emulator, sets, reads back and captures", async () => {
+    await client.callTool("unity_select_instance", { projectName: "AvatarProject" });
+    const schema = (await client.listTools()).tools.find((t) => t.name === "unity_vrc_playmode_test").inputSchema.properties;
+    for (const key of ["gestureLeftWeight", "gestureRightWeight"]) assert.ok(key in schema, `the schema advertises ${key}`);
+
+    const res = await client.callTool("unity_vrc_playmode_test", {
+      parameters: { Jacket: true },
+      gestureLeft: "fist",
+      gestureLeftWeight: 0.5,
+      settleMs: 0,
+      view: "face",
+    });
+    assert.equal(res.isError, false, res.payloadText);
+    const setRequest = bridgeAvatar.seen.find((r) => r.route === "vrc/avatar/playmode/set");
+    assert.equal(setRequest.params.gestureLeftWeight, 0.5, "gesture weights reach the plugin");
+
+    const image = res.blocks.find((b) => b.type === "image");
+    assert.ok(image, "the capture comes back as an image block");
+    assert.equal(image.mimeType, "image/png");
+    assert.ok(!res.payloadText.includes("iVBORw0KGgo"), "the PNG never leaks into the text block");
+
+    const data = res.payload?.data || res.payload;
+    assert.equal(data.enteredPlayMode, true, "the ticket lost to the domain reload does not fail the run");
+    assert.equal(data.emulator, "GestureManager");
+    assert.deepEqual(data.applied.map((a) => a.name), ["Jacket", "GestureLeft"]);
+    assert.deepEqual(
+      data.parameters.map((x) => [x.name, x.value]),
+      [["Jacket", true], ["GestureLeft", 1]],
+      "values are read back after they are set"
+    );
+    assert.equal(data.capture.view, "face");
+
+    // Already running: a second call neither re-enters play mode nor waits.
+    const playRequests = bridgeAvatar.seen.filter((r) => r.route === "editor/play-mode").length;
+    const again = await client.callTool("unity_vrc_playmode_test", { parameters: { Jacket: false }, capture: false, settleMs: 0 });
+    assert.equal(again.isError, false, again.payloadText);
+    assert.equal((again.payload?.data || again.payload).enteredPlayMode, false);
+    assert.ok(!again.blocks.some((b) => b.type === "image"), "capture:false returns no image");
+    assert.equal(bridgeAvatar.seen.filter((r) => r.route === "editor/play-mode").length, playRequests);
+  });
+
+  test("unity_vrc_udonsharp_create writes the behaviour and attaches it once compiled", async () => {
+    await client.callTool("unity_select_instance", { projectName: "WorldProject" });
+    const res = await client.callTool("unity_vrc_udonsharp_create", {
+      path: "Assets/Scripts/Door.cs",
+      attachTo: "World/Interactive/Door",
+    });
+    assert.equal(res.isError, false, res.payloadText);
+    const data = res.payload?.data || res.payload;
+    assert.equal(data.programAssetPath, "Assets/Scripts/Door.asset");
+    assert.equal(data.attach.success, true);
+    assert.equal(data.attach.backingUdonBehaviour, true);
+    assert.equal(data.compilePending, false);
+    assert.ok(!("hint" in data), "the attach-later hint is dropped once attached");
+
+    const attaches = bridgeWorld.seen.filter((r) => r.route === "vrc/world/udonsharp/attach");
+    assert.ok(attaches.length >= 2, "the attach was retried while Unity compiled");
+    assert.equal(attaches.at(-1).params.programAssetPath, "Assets/Scripts/Door.asset");
+    assert.ok(!("attachTo" in bridgeWorld.seen.find((r) => r.route === "vrc/world/udonsharp/create").params));
+  });
+
+  test("unity_vrc_udonsharp_attach reports a final failure without waiting", async () => {
+    await client.callTool("unity_select_instance", { projectName: "WorldProject" });
+    const res = await client.callTool("unity_vrc_udonsharp_attach", { targetPath: "World/Missing", className: "Door" });
+    assert.equal(res.isError, true);
+    assert.match(res.payloadText, /not found in the open scene/);
   });
 
   test("Task 9.4: An old plugin paired with new server advertises no VRChat tools and reports no errors", async () => {

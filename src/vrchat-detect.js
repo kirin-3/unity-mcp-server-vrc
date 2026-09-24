@@ -12,6 +12,9 @@ const ECOSYSTEM_PACKAGES = [
   { key: "vrcfury", packageId: "com.vrcfury.vrcfury" },
   { key: "d4rkOptimizer", packageId: "d4rkpl4y3r.d4rkavataroptimizer" },
   { key: "vrWorldToolkit", packageId: "dev.onevr.vrworldtoolkit" },
+  // Play-mode avatar emulators (unity_vrc_playmode_test)
+  { key: "gestureManager", packageId: "vrchat.blackstartx.gesture-manager" },
+  { key: "av3Emulator", packageId: "lyuma.av3emulator" },
 ];
 
 /** Cache of detected context by instance port: port -> context */
@@ -69,6 +72,8 @@ export function detectVRChatContext(projectPath) {
       vrcfury: { available: false, version: null },
       d4rkOptimizer: { available: false, version: null },
       vrWorldToolkit: { available: false, version: null },
+      gestureManager: { available: false, version: null },
+      av3Emulator: { available: false, version: null },
       poiyomi: { available: false, version: null },
     },
   };

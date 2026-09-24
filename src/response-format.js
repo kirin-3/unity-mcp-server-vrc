@@ -24,6 +24,36 @@ export function formatResult(value) {
 }
 
 /**
+ * Shared shaping for image-returning tools (graphics captures, VRChat play-mode capture).
+ * The bridge wraps plugin payloads as { success, data: { ..., base64 } } (queue mode)
+ * but legacy mode and some code paths surface { ..., base64 } at the top level, so the
+ * image is looked up at both depths. The base64 payload must NEVER remain inside the
+ * metadata text block: a single leaked PNG is a multi-hundred-KB token bomb.
+ * @param {object} result Bridge result carrying a base64 PNG.
+ * @param {string} noImageError Error reported when the result has no image.
+ * @returns {string|Array<object>} Text on failure, else [image block, metadata text block].
+ */
+export function imageResultBlocks(result, noImageError) {
+  if (result.error) return formatResult(result);
+  const imageData = result.data?.base64 || result.base64;
+  if (!imageData || typeof imageData !== "string") {
+    // noImageError last so an empty-string result.error can't clobber the message.
+    return formatResult({ ...result, error: noImageError });
+  }
+  const metadata = { ...result };
+  delete metadata.base64;
+  if (metadata.data && typeof metadata.data === "object") {
+    metadata.data = { ...metadata.data };
+    delete metadata.data.base64;
+  }
+  const b64 = imageData.replace(/^data:image\/\w+;base64,/, "");
+  return [
+    { type: "image", data: b64, mimeType: "image/png" },
+    { type: "text", text: formatResult(metadata) },
+  ];
+}
+
+/**
  * Conservative check: does this parsed object look like a logical failure?
  * @param {*} obj
  * @returns {boolean}

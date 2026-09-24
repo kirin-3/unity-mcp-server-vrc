@@ -353,7 +353,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
     selectedInstance = getSelectedInstance();
   }
   const vrcContext = resolveVRChatContext(selectedInstance);
-  const activeTools = filterToolsForProject(ALL_TOOLS, vrcContext);
+  const activeTools = filterToolsForProject(ALL_TOOLS, vrcContext, selectedInstance);
 
   return {
     tools: activeTools.map(({ name, description, inputSchema }) => {
@@ -465,7 +465,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     // call skips discovery, so getSelectedInstance() is stale or null there.
     const _targetInst = getTargetInstance();
     const activeContext = _targetInst?.projectPath ? resolveVRChatContext(_targetInst) : null;
-    const gateCheck = checkToolProjectGate(tool, activeContext);
+    const gateCheck = checkToolProjectGate(tool, activeContext, _targetInst);
     if (!gateCheck.allowed) {
       return {
         content: [{ type: "text", text: gateCheck.reason }],
