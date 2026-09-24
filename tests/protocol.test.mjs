@@ -2235,13 +2235,19 @@ describe("VRChat project detection and surface shaping (mock bridge)", () => {
 
   test("unity_vrc_playmode_test enters play mode, waits for the emulator, sets, reads back and captures", async () => {
     await client.callTool("unity_select_instance", { projectName: "AvatarProject" });
+    const schema = (await client.listTools()).tools.find((t) => t.name === "unity_vrc_playmode_test").inputSchema.properties;
+    for (const key of ["gestureLeftWeight", "gestureRightWeight"]) assert.ok(key in schema, `the schema advertises ${key}`);
+
     const res = await client.callTool("unity_vrc_playmode_test", {
       parameters: { Jacket: true },
       gestureLeft: "fist",
+      gestureLeftWeight: 0.5,
       settleMs: 0,
       view: "face",
     });
     assert.equal(res.isError, false, res.payloadText);
+    const setRequest = bridgeAvatar.seen.find((r) => r.route === "vrc/avatar/playmode/set");
+    assert.equal(setRequest.params.gestureLeftWeight, 0.5, "gesture weights reach the plugin");
 
     const image = res.blocks.find((b) => b.type === "image");
     assert.ok(image, "the capture comes back as an image block");

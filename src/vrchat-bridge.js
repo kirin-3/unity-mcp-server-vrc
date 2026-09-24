@@ -402,7 +402,8 @@ function pick(source, keys) {
 // call goes from edit mode to a captured result: status → enter play mode → wait for the
 // emulator → set → settle → read back → capture.
 const PLAYMODE_POLL_INTERVAL_MS = 1000;
-const PLAYMODE_TIMEOUT_MS = Number(process.env.UNITY_VRC_PLAYMODE_TIMEOUT || 120000);
+// Entering play mode builds the avatar (VRCFury, NDMF, optimizers); a heavy one took two minutes.
+const PLAYMODE_TIMEOUT_MS = Number(process.env.UNITY_VRC_PLAYMODE_TIMEOUT || 300000);
 // Unity refused the switch (e.g. compile errors) if it keeps answering from edit mode this long.
 const PLAYMODE_ENTER_GRACE_MS = 15000;
 // Once play mode runs, an emulator that is in the scene attaches within a few frames.
@@ -419,7 +420,9 @@ function notReady(error, extra = {}) {
  */
 async function waitForEmulator(statusArgs, deadline, playRequestedAt) {
   let last = null;
-  let playingSince = null;
+  // Counted in answered polls, not wall time: building the avatar can stall the editor for minutes
+  // after play mode starts, and the emulator attaches only once it is done.
+  let playingPolls = 0;
   while (Date.now() < deadline) {
     const status = pluginData(await sendCommand("vrc/avatar/playmode/status", statusArgs));
     if (status) {
@@ -431,9 +434,9 @@ async function waitForEmulator(statusArgs, deadline, playRequestedAt) {
         const refused = status.enteringPlayMode === false && Date.now() - playRequestedAt > PLAYMODE_ENTER_GRACE_MS;
         if (refused) return { error: `Unity did not enter play mode. ${status.hint || ""}`.trim() };
       } else {
-        playingSince ??= Date.now();
+        playingPolls++;
         const noEmulator = Array.isArray(status.emulatorsInScene) && status.emulatorsInScene.length === 0;
-        if (noEmulator || Date.now() - playingSince > PLAYMODE_ATTACH_GRACE_MS) {
+        if (noEmulator || playingPolls * PLAYMODE_POLL_INTERVAL_MS > PLAYMODE_ATTACH_GRACE_MS) {
           return { error: status.hint || "No emulator is driving the avatar." };
         }
       }
@@ -445,7 +448,7 @@ async function waitForEmulator(statusArgs, deadline, playRequestedAt) {
   return {
     error:
       `The avatar emulator was not ready after ${waited}s` +
-      (last?.hint ? `: ${last.hint}` : ". Unity may still be entering play mode; raise UNITY_VRC_PLAYMODE_TIMEOUT for slow projects."),
+      (last?.hint ? `: ${last.hint}` : ". Unity may still be building the avatar for play mode; call again to pick up where it is, or raise UNITY_VRC_PLAYMODE_TIMEOUT."),
   };
 }
 

@@ -643,6 +643,8 @@ export const vrchatAvatarTools = [
           description: "0-7 or a name: neutral, fist, open, point, peace, rock, gun, thumbs.",
         },
         gestureRight: { anyOf: [{ type: "integer" }, { type: "string" }], description: "Same as gestureLeft." },
+        gestureLeftWeight: { type: "number", description: "Trigger pull 0-1 for analog fist animations." },
+        gestureRightWeight: { type: "number", description: "Same as gestureLeftWeight." },
         enterPlayMode: { type: "boolean", description: "Enter play mode when needed (default true)." },
         settleMs: { type: "number", description: "Wait after setting, in ms (default 1000)." },
         capture: { type: "boolean", description: "Return an image (default true)." },

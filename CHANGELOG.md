@@ -8,12 +8,12 @@ Companion to plugin **2.41.0**: VRChat authoring v2. The new tools need plugin p
 
 ### Added
 - **VRCFury features** (VRCFury features are `[SerializeReference]`, which `unity_component_set_property` cannot build):
-  - `unity_vrc_vrcfury_toggle`: create or update a Toggle, found by its menu path. Covers objects on/off, blendshapes, material swaps, saved, default on, slider, exclusive tags and a global parameter. An update replaces only the object, blendshape and material actions.
+  - `unity_vrc_vrcfury_toggle`: create or update a Toggle, found by its menu path. Covers objects on/off, blendshapes, material swaps, saved, default on, slider, exclusive tags and a global parameter. An update replaces only the object, blendshape and material actions. Turning an object on while another toggle turns it off (or the reverse) is refused, because VRCFury would abort the build.
   - `unity_vrc_vrcfury_armature_link`: add or update an Armature Link and report which bones will link.
 - **Outfit attach**:
   - `unity_vrc_outfit_attach`: put a clothing prefab under a humanoid avatar and merge it with Modular Avatar Merge Armature or VRCFury Armature Link, whichever the outfit or project uses. Reports the bones that won't merge, usually prefix or suffix mismatches, with the fix. A failed attach is undone in one step. Listed when either package is installed.
 - **Play-mode testing**:
-  - `unity_vrc_playmode_test`: one call runs the whole check. It enters play mode if needed, waits for Gesture Manager or Av3Emulator to drive the avatar, and sets parameters and gestures through the emulator. Then it reads the values back and returns an image of the avatar. If the scene has no emulator, it stays in edit mode and names the menu item that adds one. It also stays in edit mode when compile errors would block play mode. Play mode is left running for follow-up calls. Listed when Gesture Manager or Av3Emulator is installed. `UNITY_VRC_PLAYMODE_TIMEOUT` (default 120 s) bounds the wait.
+  - `unity_vrc_playmode_test`: one call runs the whole check. It enters play mode if needed, waits for Gesture Manager or Av3Emulator to drive the avatar, and sets parameters, gestures and gesture weights through the emulator. Then it reads the values back and returns an image of the avatar. If the scene has no emulator, it stays in edit mode and names the menu item that adds one. It also stays in edit mode when compile errors would block play mode. Play mode is left running for follow-up calls. Listed when Gesture Manager or Av3Emulator is installed. `UNITY_VRC_PLAYMODE_TIMEOUT` (default 300 s, since entering play mode builds the avatar) bounds the wait.
 - **Blendshapes**:
   - `unity_vrc_blendshapes_list`: blendshape names and weights on a mesh (default: the face mesh), optionally with Unified Expressions, ARKit and SRanipal face-tracking coverage.
   - `unity_vrc_blendshapes_set`: set weights by name. Every name is checked first, with suggestions for near misses.
@@ -29,6 +29,7 @@ Companion to plugin **2.41.0**: VRChat authoring v2. The new tools need plugin p
 - Tools can declare the plugin protocol they need (`pluginFeature`). This is only checked when the plugin reported a protocol version.
 - Updating the Unity plugin while the server runs is picked up on the next call: the server refreshes the instance's protocol version and sends `tools/list_changed`. Before, the old protocol version was used until the instance was selected again.
 - `imageResultBlocks` moved from `editor-tools.js` to `response-format.js` so VRChat tools can return images.
+- With plugin 2.41.0, avatar analysis (`unity_vrc_avatar_performance`, `_parameters`, `_audit`) never waits on a modal dialog when a build hook fails. It returns the hook's error, and it deletes its NDMF build files afterwards.
 - Advertised catalog: 80 tools on a non-VRChat project (unchanged), up to 109 on an avatar project, up to 96 on a world project (388 tools in total). The avatar list is about 68 KB; a new test caps it at 75 KB.
 
 ### Not included

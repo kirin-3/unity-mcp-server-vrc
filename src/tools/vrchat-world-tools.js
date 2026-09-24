@@ -190,7 +190,7 @@ export const vrchatWorldTools = [
       properties: {
         path: { type: "string", description: "Script path, e.g. 'Assets/Scripts/Door.cs'. The class is named after the file." },
         content: { type: "string", description: "Full C# source deriving from UdonSharpBehaviour (default: UdonSharp's template)." },
-        overwrite: { type: "boolean", description: "Replace an existing script or program asset." },
+        overwrite: { type: "boolean", description: "Replace an existing program asset, or an existing script when content is given." },
         attachTo: { type: "string", description: "GameObject path to add the behaviour to once compiled." },
       },
       required: ["path"],
