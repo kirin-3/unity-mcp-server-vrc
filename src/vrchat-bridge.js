@@ -1,6 +1,7 @@
 // VRChat Bridge Functions
 // Bridge functions for VRChat tooling (project context, avatar analysis, shaders, world tooling)
 import { sendCommand } from "./unity-editor-bridge.js";
+import { looksLikeErrorObject } from "./response-format.js";
 
 /**
  * Get VRChat project context including project type, SDK version, and ecosystem package availability.
@@ -333,3 +334,251 @@ export async function vrcWorldContentSummary(params = {}) {
   return sendCommand("vrc/world/content/summary", params, params?.port);
 }
 
+
+// ─── VRChat authoring v2 (plugin protocol 4) ───
+
+/**
+ * Create or update a VRCFury Toggle identified by its menu path.
+ * @param {object} [params] - Parameters: avatarPath, menuPath, targetPath, objects, blendShapes, materials, saved, defaultOn, slider, exclusiveTags, exclusiveOffState, globalParam, port
+ * @returns {Promise<object>}
+ */
+export async function vrcVrcfuryToggle(params = {}) {
+  return sendCommand("vrc/avatar/vrcfury/toggle", params, params?.port);
+}
+
+/**
+ * Create or update a VRCFury Armature Link and report which bones link.
+ * @param {object} [params] - Parameters: avatarPath, targetPath, propBonePath, linkTo, recursive, align, removeBoneSuffix, port
+ * @returns {Promise<object>}
+ */
+export async function vrcVrcfuryArmatureLink(params = {}) {
+  return sendCommand("vrc/avatar/vrcfury/armature-link", params, params?.port);
+}
+
+/**
+ * Put an outfit under the avatar and merge its armature (Modular Avatar or VRCFury), reporting unmatched bones.
+ * @param {object} [params] - Parameters: avatarPath, outfitPath, method, resetTransform, port
+ * @returns {Promise<object>}
+ */
+export async function vrcOutfitAttach(params = {}) {
+  return sendCommand("vrc/avatar/outfit/attach", params, params?.port);
+}
+
+/**
+ * List a mesh's blendshapes, optionally with face-tracking coverage.
+ * @param {object} [params] - Parameters: avatarPath, meshPath, filter, faceTracking, port
+ * @returns {Promise<object>}
+ */
+export async function vrcBlendshapesList(params = {}) {
+  return sendCommand("vrc/avatar/blendshapes/list", params, params?.port);
+}
+
+/**
+ * Set blendshape weights on a mesh by name.
+ * @param {object} [params] - Parameters: avatarPath, meshPath, weights, port
+ * @returns {Promise<object>}
+ */
+export async function vrcBlendshapesSet(params = {}) {
+  return sendCommand("vrc/avatar/blendshapes/set", params, params?.port);
+}
+
+/** The plugin's answer inside a bridge result, or null when the call itself did not get through. */
+function pluginData(result) {
+  if (!result || result.success === false) return null;
+  return result.data ?? result;
+}
+
+function pick(source, keys) {
+  const out = {};
+  for (const key of keys) {
+    if (source[key] !== undefined) out[key] = source[key];
+  }
+  return out;
+}
+
+// ─── Play-mode testing ───
+// Entering play mode reloads the domain (the bridge drops for a few seconds), and the emulator
+// attaches to the avatar a few frames after play starts. The steps are sequenced here so one
+// call goes from edit mode to a captured result: status → enter play mode → wait for the
+// emulator → set → settle → read back → capture.
+const PLAYMODE_POLL_INTERVAL_MS = 1000;
+const PLAYMODE_TIMEOUT_MS = Number(process.env.UNITY_VRC_PLAYMODE_TIMEOUT || 120000);
+// Unity refused the switch (e.g. compile errors) if it keeps answering from edit mode this long.
+const PLAYMODE_ENTER_GRACE_MS = 15000;
+// Once play mode runs, an emulator that is in the scene attaches within a few frames.
+const PLAYMODE_ATTACH_GRACE_MS = 20000;
+const PLAYMODE_SET_KEYS = ["avatarPath", "parameters", "gestureLeft", "gestureRight", "gestureLeftWeight", "gestureRightWeight"];
+
+function notReady(error, extra = {}) {
+  return { success: false, error, notReady: true, ...extra };
+}
+
+/**
+ * Poll play-mode status until an emulator drives the avatar. Returns { status } when ready,
+ * or { error } explaining why it will not become ready.
+ */
+async function waitForEmulator(statusArgs, deadline, playRequestedAt) {
+  let last = null;
+  let playingSince = null;
+  while (Date.now() < deadline) {
+    const status = pluginData(await sendCommand("vrc/avatar/playmode/status", statusArgs));
+    if (status) {
+      last = status;
+      if (looksLikeErrorObject(status)) return { error: status.error || "Play-mode status failed." };
+      if (status.ready === true) return { status };
+      if (status.isPlaying !== true) {
+        if (status.compileErrors === true) return { error: status.hint };
+        const refused = status.enteringPlayMode === false && Date.now() - playRequestedAt > PLAYMODE_ENTER_GRACE_MS;
+        if (refused) return { error: `Unity did not enter play mode. ${status.hint || ""}`.trim() };
+      } else {
+        playingSince ??= Date.now();
+        const noEmulator = Array.isArray(status.emulatorsInScene) && status.emulatorsInScene.length === 0;
+        if (noEmulator || Date.now() - playingSince > PLAYMODE_ATTACH_GRACE_MS) {
+          return { error: status.hint || "No emulator is driving the avatar." };
+        }
+      }
+    }
+    // A null status is the bridge dropping during the play-mode domain reload: keep polling.
+    await sleep(PLAYMODE_POLL_INTERVAL_MS);
+  }
+  const waited = Math.round(PLAYMODE_TIMEOUT_MS / 1000);
+  return {
+    error:
+      `The avatar emulator was not ready after ${waited}s` +
+      (last?.hint ? `: ${last.hint}` : ". Unity may still be entering play mode; raise UNITY_VRC_PLAYMODE_TIMEOUT for slow projects."),
+  };
+}
+
+/**
+ * Test an avatar in play mode: optionally enter play mode, set parameters and gestures through
+ * Gesture Manager or Av3Emulator, let the animator settle, read the values back, and capture it.
+ * @param {object} [params] - Parameters: avatarPath, parameters, gestureLeft, gestureRight,
+ *   enterPlayMode (default true), settleMs (default 1000), capture (default true), view, width, height
+ * @returns {Promise<object>} { success, data: { ..., base64? } } or a failure with notReady when play mode or the emulator is missing.
+ */
+export async function vrcPlaymodeTest(params = {}) {
+  const statusArgs = pick(params, ["avatarPath"]);
+  const setArgs = pick(params, PLAYMODE_SET_KEYS);
+  const wantsSet = Object.keys(setArgs).some((key) => key !== "avatarPath");
+  const deadline = Date.now() + PLAYMODE_TIMEOUT_MS;
+
+  const first = await sendCommand("vrc/avatar/playmode/status", statusArgs);
+  let status = pluginData(first);
+  if (!status || looksLikeErrorObject(status)) return first;
+
+  let enteredPlayMode = false;
+  if (status.ready !== true) {
+    if (status.isPlaying !== true) {
+      if (params.enterPlayMode === false) {
+        return notReady(status.hint || "Not in play mode.", { emulatorsInScene: status.emulatorsInScene });
+      }
+      if (status.compileErrors === true) return notReady(status.hint);
+      if (Array.isArray(status.emulatorsInScene) && status.emulatorsInScene.length === 0) {
+        return notReady(status.hint, { emulatorsInScene: [] });
+      }
+      // The play-mode domain reload can evict this ticket after the switch happened;
+      // the status polling below is what confirms it either way.
+      await sendCommand("editor/play-mode", { action: "play" });
+      enteredPlayMode = true;
+    }
+    const waited = await waitForEmulator(statusArgs, deadline, Date.now());
+    if (waited.error) return notReady(waited.error, { enteredPlayMode });
+    status = waited.status;
+  }
+
+  const data = { emulator: status.emulator, avatar: status.avatar, enteredPlayMode };
+
+  if (wantsSet) {
+    let set = pluginData(await sendCommand("vrc/avatar/playmode/set", setArgs));
+    while ((!set || set.notReady === true) && Date.now() < deadline) {
+      await sleep(PLAYMODE_POLL_INTERVAL_MS);
+      set = pluginData(await sendCommand("vrc/avatar/playmode/set", setArgs));
+    }
+    if (!set || looksLikeErrorObject(set)) {
+      return { success: false, error: set?.error || "Setting the parameters failed.", errors: set?.errors, enteredPlayMode };
+    }
+    data.applied = set.applied;
+
+    const settleMs = Number.isFinite(params.settleMs) ? Math.min(Math.max(params.settleMs, 0), 10000) : 1000;
+    await sleep(settleMs);
+
+    // Read the values back: a layer or another script can drive a parameter straight back.
+    const names = (set.applied || []).map((entry) => entry.name);
+    const readback = pluginData(await sendCommand("vrc/avatar/playmode/status", { ...statusArgs, names }));
+    if (readback?.parameters) data.parameters = readback.parameters;
+  }
+
+  if (params.capture !== false) {
+    const capture = pluginData(
+      await sendCommand("vrc/avatar/playmode/capture", pick(params, ["avatarPath", "view", "width", "height"]))
+    );
+    if (!capture || looksLikeErrorObject(capture)) {
+      data.captureError = capture?.error || "Capture failed.";
+    } else {
+      data.capture = { view: capture.view, width: capture.width, height: capture.height };
+      // At the top of data, where the tool turns it into an image block.
+      data.base64 = capture.base64;
+    }
+  }
+  return { success: true, data };
+}
+
+// ─── UdonSharp ───
+// Writing a script starts a compile and a domain reload; the behaviour class only exists
+// afterwards. Attaching is therefore retried while the plugin answers "pending" or the
+// bridge is down for the reload.
+const UDONSHARP_POLL_INTERVAL_MS = 2000;
+const UDONSHARP_TIMEOUT_MS = Number(process.env.UNITY_VRC_UDONSHARP_TIMEOUT || 180000);
+
+async function attachWhenCompiled(args) {
+  const deadline = Date.now() + UDONSHARP_TIMEOUT_MS;
+  while (true) {
+    const attached = await sendCommand("vrc/world/udonsharp/attach", args);
+    const data = pluginData(attached);
+    // Anything but "pending" or a dropped bridge is the final answer.
+    if (data && data.pending !== true) return looksLikeErrorObject(data) ? { success: false, ...data } : data;
+    if (Date.now() >= deadline) {
+      return { ...(data ?? { success: false, error: attached?.error }), pending: true, timedOut: true };
+    }
+    await sleep(UDONSHARP_POLL_INTERVAL_MS);
+  }
+}
+
+/**
+ * Attach an UdonSharp behaviour to a GameObject, waiting while Unity compiles it.
+ * @param {object} [params] - Parameters: programAssetPath, scriptPath, className, targetPath, port
+ * @returns {Promise<object>}
+ */
+export async function vrcUdonSharpAttach(params = {}) {
+  const attached = await attachWhenCompiled(params);
+  if (attached.success !== false) return { success: true, data: attached };
+  if (!attached.timedOut) return { success: false, error: attached.error, data: attached };
+  const waited = Math.round(UDONSHARP_TIMEOUT_MS / 1000);
+  return { success: false, error: `Unity was still compiling after ${waited}s; try again once compilation finishes.`, data: attached };
+}
+
+/**
+ * Create an UdonSharp behaviour (script + program asset) and optionally attach it once compiled.
+ * @param {object} [params] - Parameters: path, className, content, overwrite, attachTo, port
+ * @returns {Promise<object>}
+ */
+export async function vrcUdonSharpCreate(params = {}) {
+  const { attachTo, ...createArgs } = params;
+  const created = await sendCommand("vrc/world/udonsharp/create", createArgs, params?.port);
+  const data = pluginData(created);
+  if (!attachTo || !data || looksLikeErrorObject(data)) return created;
+
+  // Give Unity a moment to start compiling the new script before the first try.
+  if (data.compilePending !== false) await sleep(UDONSHARP_POLL_INTERVAL_MS);
+  const attach = await attachWhenCompiled({ programAssetPath: data.programAssetPath, targetPath: attachTo });
+  // The plugin's "attach it once compiled" hint is handled here.
+  const { hint, ...createdData } = data;
+  const result = { ...createdData, compilePending: attach.pending === true, attach };
+  if (attach.success !== false) return { success: true, data: result };
+
+  const waited = Math.round(UDONSHARP_TIMEOUT_MS / 1000);
+  const reason = attach.timedOut
+    ? `Unity was still compiling after ${waited}s. Attach it with unity_vrc_udonsharp_attach once compilation finishes.`
+    : attach.error;
+  return { success: false, error: `Created ${data.scriptPath} and ${data.programAssetPath}, but attaching failed: ${reason}`, data: result };
+}

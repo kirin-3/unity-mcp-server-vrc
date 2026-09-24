@@ -10,18 +10,22 @@ It's an MCP server that lets Claude, Cursor, or any other MCP client drive the U
 
 For the full list of Unity tools, see the [upstream README](https://github.com/AnkleBreaker-Studio/unity-mcp-server#readme).
 
-## Changes in this fork (v2.36.0)
+## Changes in this fork (v2.37.0)
 
-- **31 VRChat tools (`unity_vrc_*`)**
-  - **Avatar analysis:** performance rank against PC and Quest limits, the 256-bit synced parameter budget, a Write Defaults audit, missing scripts, and texture memory.
+- **39 VRChat tools (`unity_vrc_*`)**
+  - **Avatar analysis:** performance rank against PC and Quest limits, the 256-bit synced parameter budget, and an audit of the baked avatar: Write Defaults, missing scripts, texture memory, animation paths that no longer resolve, mesh bounds, and Anchor Overrides.
   - **Avatar authoring:** descriptor inspection, viseme auto-mapping, playable layers, expression parameters that refuse to go over budget, expression menus that respect the 8-control limit, PhysBones, contacts, Modular Avatar and VRCFury components.
+  - **VRCFury features:** create or update a Toggle (objects, blendshapes, material swaps, menu path, saved, default) and Armature Link.
+  - **Outfits:** attach a clothing prefab with MA Merge Armature or VRCFury Armature Link and get a report of the bones that won't merge.
+  - **Play-mode testing:** set parameters and gestures through Gesture Manager or Av3Emulator and get an image of the result, in one call.
+  - **Blendshapes:** list and set them by name, with Unified Expressions, ARKit, and SRanipal face-tracking coverage.
   - **Poiyomi:** material lock status, batch lock/unlock, and reading and writing properties.
-  - **Worlds:** scene descriptor and spawn points, Udon behaviour listing, type-safe writes to public variables, VRWorldToolkit validation, and a content summary that flags unspatialized audio.
-  - **Project context:** detects whether the project is an avatar, world, or neither, plus the ecosystem packages installed (MA, NDMF, VRCFury, d4rk, VRWorldToolkit, Poiyomi).
+  - **Worlds:** scene descriptor and spawn points, Udon behaviour listing, type-safe writes to public variables, UdonSharp behaviours (script, program asset, and component), VRWorldToolkit validation, and a content summary that flags unspatialized audio.
+  - **Project context:** detects whether the project is an avatar, world, or neither, plus the ecosystem packages installed (MA, NDMF, VRCFury, d4rk, VRWorldToolkit, Gesture Manager, Av3Emulator, Poiyomi).
 - **Project-aware tool list:** avatar projects only see avatar tools and world projects only see world tools. Non-VRChat projects see no VRChat tools.
 - **VRChat safety guards:** on a VRChat project, `unity_build`, the player/quality/physics settings tools, and edits to reserved layers 0–22 or their collision matrix are refused. Pass `override: true` on a single call to run one anyway. There is no global switch for this.
 - **Trimmed default surface:** UMA, Amplify, MPPM, Input System, and NavMesh tools are pinned to the advanced tier. You can still reach them through `unity_advanced_tool`.
-- **Plugin protocol v2:** the server only advertises VRChat tools when the plugin reports support for them.
+- **Plugin protocol:** the server only advertises the VRChat tools the connected plugin can answer (protocol 2 for the original set, protocol 4 for the authoring tools above). Updating the plugin mid-session is picked up on the next call.
 - **Tests:** unit tests for detection and tool-surface shaping, protocol tests, and live avatar and world suites.
 
 See [CHANGELOG.md](CHANGELOG.md) for details.

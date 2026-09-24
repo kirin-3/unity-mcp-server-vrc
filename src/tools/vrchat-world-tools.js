@@ -9,6 +9,8 @@ import {
   vrcWorldUdonSetVariable,
   vrcWorldValidate,
   vrcWorldContentSummary,
+  vrcUdonSharpCreate,
+  vrcUdonSharpAttach,
 } from "../vrchat-bridge.js";
 
 export const vrchatWorldTools = [
@@ -176,5 +178,40 @@ export const vrchatWorldTools = [
       const result = await vrcWorldContentSummary(args);
       return formatResult(result);
     },
+  },
+  {
+    name: "unity_vrc_udonsharp_create",
+    description:
+      "Create an UdonSharp behaviour: writes the script (an existing one given no content is kept) and its program asset. With attachTo, waits for compilation and adds it to that GameObject.",
+    vrchatProjectType: "world",
+    pluginFeature: "VRCHAT_AUTHORING_V2",
+    inputSchema: {
+      type: "object",
+      properties: {
+        path: { type: "string", description: "Script path, e.g. 'Assets/Scripts/Door.cs'. The class is named after the file." },
+        content: { type: "string", description: "Full C# source deriving from UdonSharpBehaviour (default: UdonSharp's template)." },
+        overwrite: { type: "boolean", description: "Replace an existing script or program asset." },
+        attachTo: { type: "string", description: "GameObject path to add the behaviour to once compiled." },
+      },
+      required: ["path"],
+    },
+    handler: async (args) => formatResult(await vrcUdonSharpCreate(args)),
+  },
+  {
+    name: "unity_vrc_udonsharp_attach",
+    description: "Add an UdonSharp behaviour (and its backing UdonBehaviour) to a GameObject, waiting while Unity compiles it.",
+    vrchatProjectType: "world",
+    pluginFeature: "VRCHAT_AUTHORING_V2",
+    inputSchema: {
+      type: "object",
+      properties: {
+        targetPath: { type: "string", description: "GameObject path." },
+        scriptPath: { type: "string", description: "The behaviour's script path; or give className or programAssetPath." },
+        className: { type: "string" },
+        programAssetPath: { type: "string" },
+      },
+      required: ["targetPath"],
+    },
+    handler: async (args) => formatResult(await vrcUdonSharpAttach(args)),
   },
 ];

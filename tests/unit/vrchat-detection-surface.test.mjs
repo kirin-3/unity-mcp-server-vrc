@@ -31,6 +31,12 @@ describe("VRChat capabilities and protocol version gate", () => {
     assert.equal(pluginSupports({}, "VRCHAT_ROUTES"), false);
     assert.equal(pluginSupports(null, "VRCHAT_ROUTES"), false);
   });
+
+  test("VRCHAT_AUTHORING_V2 requires protocolVersion 4", () => {
+    assert.equal(PLUGIN_FEATURES.VRCHAT_AUTHORING_V2, 4);
+    assert.equal(pluginSupports({ protocolVersion: 4 }, "VRCHAT_AUTHORING_V2"), true);
+    assert.equal(pluginSupports({ protocolVersion: 3 }, "VRCHAT_AUTHORING_V2"), false);
+  });
 });
 
 describe("VRChat filesystem detection (synthetic fixtures)", () => {
@@ -110,10 +116,23 @@ describe("VRChat filesystem detection (synthetic fixtures)", () => {
     const ctx = detectVRChatContext(makeProject({ sdk: null }));
     assert.equal(ctx.projectType, "none");
     assert.equal(ctx.sdkVersion, null);
-    for (const key of ["modularAvatar", "ndmf", "vrcfury", "d4rkOptimizer", "vrWorldToolkit", "poiyomi"]) {
+    for (const key of ["modularAvatar", "ndmf", "vrcfury", "d4rkOptimizer", "vrWorldToolkit", "gestureManager", "av3Emulator", "poiyomi"]) {
       assert.equal(ctx.packages[key].available, false);
       assert.equal(ctx.packages[key].version, null);
     }
+  });
+
+  test("detects the Gesture Manager and Av3Emulator play-mode emulators", () => {
+    const ctx = detectVRChatContext(
+      makeProject({
+        sdk: "com.vrchat.avatars",
+        packages: { "vrchat.blackstartx.gesture-manager": "3.9.9", "lyuma.av3emulator": "3.4.14" },
+      })
+    );
+    assert.equal(ctx.packages.gestureManager.available, true);
+    assert.equal(ctx.packages.gestureManager.version, "3.9.9");
+    assert.equal(ctx.packages.av3Emulator.available, true);
+    assert.equal(ctx.packages.av3Emulator.version, "3.4.14");
   });
 
   test("caching per instance port and invalidation", () => {
@@ -239,6 +258,61 @@ describe("VRChat tool surface shaping", () => {
     assert.equal(checkToolProjectGate(avatarTool, undefined).allowed, true);
     // A context we *did* resolve still refuses.
     assert.equal(checkToolProjectGate(avatarTool, { projectType: "none", packages: {} }).allowed, false);
+  });
+
+  test("an integration list is satisfied by any one installed package", () => {
+    const outfitTool = {
+      name: "unity_vrc_outfit_attach",
+      vrchatProjectType: "avatar",
+      vrchatIntegration: ["modularAvatar", "vrcfury"],
+    };
+    const only = (key) => ({ projectType: "avatar", packages: { [key]: { available: true } } });
+    assert.equal(filterToolsForProject([outfitTool], only("modularAvatar")).length, 1);
+    assert.equal(filterToolsForProject([outfitTool], only("vrcfury")).length, 1);
+    assert.equal(filterToolsForProject([outfitTool], only("ndmf")).length, 0);
+
+    const refused = checkToolProjectGate(outfitTool, only("ndmf"));
+    assert.equal(refused.allowed, false);
+    assert.match(refused.reason, /"modularAvatar" or "vrcfury" package/);
+    assert.match(refused.reason, /none of them was found/);
+    assert.equal(checkToolProjectGate(outfitTool, only("vrcfury")).allowed, true);
+  });
+
+  test("tools that need a newer plugin protocol are hidden from and refused on older plugins", () => {
+    const tool = { name: "unity_vrc_blendshapes_list", vrchatProjectType: "avatar", pluginFeature: "VRCHAT_AUTHORING_V2" };
+    const avatar = { projectType: "avatar", packages: {} };
+    assert.equal(filterToolsForProject([tool], avatar, { protocolVersion: 3 }).length, 0);
+    assert.equal(filterToolsForProject([tool], avatar, { protocolVersion: 4 }).length, 1);
+    // No reported protocol (a registry-only, port-routed instance): the plugin decides.
+    assert.equal(filterToolsForProject([tool], avatar, { port: 7890 }).length, 1);
+    assert.equal(filterToolsForProject([tool], avatar).length, 1);
+
+    const refused = checkToolProjectGate(tool, avatar, { protocolVersion: 3 });
+    assert.equal(refused.allowed, false);
+    assert.match(refused.reason, /protocol 4 or later, but the connected plugin reports protocol 3/);
+    assert.equal(checkToolProjectGate(tool, avatar, { protocolVersion: 4 }).allowed, true);
+    // A project mismatch is still the reason given first.
+    const wrongProject = checkToolProjectGate(tool, { projectType: "world", packages: {} }, { protocolVersion: 3 });
+    assert.match(wrongProject.reason, /avatar project/);
+  });
+
+  test("every authoring v2 tool is gated on plugin protocol 4", () => {
+    const authoringV2 = [
+      "unity_vrc_vrcfury_toggle",
+      "unity_vrc_vrcfury_armature_link",
+      "unity_vrc_outfit_attach",
+      "unity_vrc_playmode_test",
+      "unity_vrc_blendshapes_list",
+      "unity_vrc_blendshapes_set",
+      "unity_vrc_udonsharp_create",
+      "unity_vrc_udonsharp_attach",
+    ];
+    const defined = [...vrchatAvatarTools, ...vrchatWorldTools];
+    for (const name of authoringV2) {
+      const tool = defined.find((t) => t.name === name);
+      assert.ok(tool, `${name} is defined`);
+      assert.equal(tool.pluginFeature, "VRCHAT_AUTHORING_V2", `${name} must be hidden from plugins older than protocol 4`);
+    }
   });
 
   test("Task 9.1: No tool in the completed surface performs a VRChat upload or publish", () => {

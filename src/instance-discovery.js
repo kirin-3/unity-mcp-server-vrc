@@ -140,6 +140,15 @@ export async function validateSelectedInstance() {
   if (alive) {
     const info = await getInstanceInfo(savedPort);
     if (info && info.projectPath && info.projectPath === savedPath) {
+      // The plugin can be updated while this server runs (its domain reload keeps the port).
+      // Keep the handshake current, or tools gated on protocolVersion stay hidden until restart.
+      if (info.protocolVersion !== currentInstance.protocolVersion || info.pluginVersion !== currentInstance.pluginVersion) {
+        const refreshed = { ...currentInstance, protocolVersion: info.protocolVersion, pluginVersion: info.pluginVersion };
+        _agentInstances.set(_currentAgentId, refreshed);
+        debugLog(`Plugin on port ${savedPort} now reports protocol ${info.protocolVersion} (${info.pluginVersion}); refreshing the tool list.`);
+        triggerInstanceSelectionChanged(savedPort);
+        return refreshed;
+      }
       return currentInstance;
     }
 

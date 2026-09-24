@@ -16,6 +16,11 @@ export const PLUGIN_FEATURES = {
   UNKNOWN_ROUTE_404: 1,
   // protocolVersion 2: VRChat routes and project-context support.
   VRCHAT_ROUTES: 2,
+  // protocolVersion 3 made avatar analysis deferred (jobId + vrc/avatar/job); the server
+  // accepts both answer shapes, so nothing is gated on it.
+  // protocolVersion 4: VRChat authoring v2 — VRCFury Toggle/Armature Link, outfit attach,
+  // play-mode emulator control and capture, blendshapes, UdonSharp create/attach.
+  VRCHAT_AUTHORING_V2: 4,
 };
 
 /**

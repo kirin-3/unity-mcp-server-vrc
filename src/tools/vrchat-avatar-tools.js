@@ -1,5 +1,5 @@
 // VRChat Avatar Tools
-import { formatResult } from "../response-format.js";
+import { formatResult, imageResultBlocks } from "../response-format.js";
 import {
   vrcAvatarPerformance,
   vrcAvatarParameters,
@@ -18,7 +18,16 @@ import {
   vrcAvatarNonDestructiveList,
   vrcModularAvatarAdd,
   vrcVrcfuryAdd,
+  vrcVrcfuryToggle,
+  vrcVrcfuryArmatureLink,
+  vrcOutfitAttach,
+  vrcPlaymodeTest,
+  vrcBlendshapesList,
+  vrcBlendshapesSet,
 } from "../vrchat-bridge.js";
+
+const AUTHORING_V2 = "VRCHAT_AUTHORING_V2";
+const avatarPathProperty = { type: "string", description: "Avatar GameObject path or name." };
 
 export const vrchatAvatarTools = [
   {
@@ -63,7 +72,8 @@ export const vrchatAvatarTools = [
   },
   {
     name: "unity_vrc_avatar_audit",
-    description: "Audit avatar for Write Defaults consistency across layers, missing scripts by object path, and texture memory.",
+    description:
+      "Audit the baked avatar: Write Defaults consistency, missing scripts, texture memory, animation paths that no longer resolve, mismatched mesh bounds, and Anchor Overrides.",
     vrchatProjectType: "avatar",
     inputSchema: {
       type: "object",
@@ -448,6 +458,10 @@ export const vrchatAvatarTools = [
           type: "string",
           description: "Avatar GameObject path or name.",
         },
+        includeDetails: {
+          type: "boolean",
+          description: "Also return each component's settings (MA fields, VRCFury feature).",
+        },
       },
     },
     handler: async (args) => {
@@ -511,5 +525,168 @@ export const vrchatAvatarTools = [
       const result = await vrcVrcfuryAdd(args);
       return formatResult(result);
     },
+  },
+  {
+    name: "unity_vrc_vrcfury_toggle",
+    description:
+      "Create or update a VRCFury Toggle, found by its menu path: objects on/off, blendshapes, material swaps, saved, default on. An update replaces only its object, blendshape and material actions.",
+    vrchatProjectType: "avatar",
+    vrchatIntegration: "vrcfury",
+    pluginFeature: AUTHORING_V2,
+    inputSchema: {
+      type: "object",
+      properties: {
+        avatarPath: avatarPathProperty,
+        menuPath: { type: "string", description: "Menu path, e.g. 'Clothing/Jacket'. Identifies the toggle." },
+        targetPath: { type: "string", description: "Object under the avatar that holds a new toggle (default: avatar root)." },
+        objects: {
+          type: "array",
+          description: "Objects the toggle turns on (mode 'on', default) or off.",
+          items: {
+            type: "object",
+            properties: { path: { type: "string" }, mode: { type: "string", enum: ["on", "off"] } },
+            required: ["path"],
+          },
+        },
+        blendShapes: {
+          type: "array",
+          description: "Blendshapes set while on: value 0-100 (default 100); rendererPath limits it to one mesh.",
+          items: {
+            type: "object",
+            properties: { name: { type: "string" }, value: { type: "number" }, rendererPath: { type: "string" } },
+            required: ["name"],
+          },
+        },
+        materials: {
+          type: "array",
+          description: "Material swaps while on: renderer path, slot (default 0), material asset path.",
+          items: {
+            type: "object",
+            properties: { rendererPath: { type: "string" }, slot: { type: "number" }, material: { type: "string" } },
+            required: ["rendererPath", "material"],
+          },
+        },
+        saved: { type: "boolean", description: "Keep the state between worlds." },
+        defaultOn: { type: "boolean", description: "On by default." },
+        slider: { type: "boolean", description: "Radial slider instead of on/off." },
+        exclusiveTags: {
+          type: "array",
+          items: { type: "string" },
+          description: "Turning this on turns off other toggles with a shared tag.",
+        },
+        exclusiveOffState: { type: "boolean", description: "On whenever every toggle sharing its tags is off." },
+        globalParam: { type: "string", description: "Use this parameter name instead of a generated one." },
+      },
+      required: ["menuPath"],
+    },
+    handler: async (args) => formatResult(await vrcVrcfuryToggle(args)),
+  },
+  {
+    name: "unity_vrc_vrcfury_armature_link",
+    description:
+      "Add or update a VRCFury Armature Link on a prop or clothing object and report which of its bones link to avatar bones.",
+    vrchatProjectType: "avatar",
+    vrchatIntegration: "vrcfury",
+    pluginFeature: AUTHORING_V2,
+    inputSchema: {
+      type: "object",
+      properties: {
+        avatarPath: avatarPathProperty,
+        targetPath: { type: "string", description: "Prop or clothing object under the avatar." },
+        propBonePath: { type: "string", description: "Bone to link, relative to targetPath (default: found, e.g. 'Armature/Hips')." },
+        linkTo: { type: "string", description: "Humanoid bone name or avatar path (default 'Hips')." },
+        recursive: { type: "boolean", description: "Also link child bones by name, as clothing needs (default: detected)." },
+        align: { type: "boolean", description: "Snap the prop bone onto the avatar bone (default: same as recursive)." },
+        removeBoneSuffix: { type: "string", description: "Suffix to strip from prop bone names before matching." },
+      },
+      required: ["targetPath"],
+    },
+    handler: async (args) => formatResult(await vrcVrcfuryArmatureLink(args)),
+  },
+  {
+    name: "unity_vrc_outfit_attach",
+    description:
+      "Put a clothing prefab under a humanoid avatar and merge its armature with Modular Avatar Merge Armature or VRCFury Armature Link, then report bones that won't merge (usually prefix/suffix mismatches) and the fix. A failed attach is undone.",
+    vrchatProjectType: "avatar",
+    vrchatIntegration: ["modularAvatar", "vrcfury"],
+    pluginFeature: AUTHORING_V2,
+    inputSchema: {
+      type: "object",
+      properties: {
+        avatarPath: avatarPathProperty,
+        outfitPath: { type: "string", description: "Prefab asset path (e.g. 'Assets/Outfits/Hoodie.prefab') or a scene object." },
+        method: {
+          type: "string",
+          enum: ["auto", "modularAvatar", "vrcfury"],
+          description: "auto (default): the component the outfit already has, else the installed tool.",
+        },
+        resetTransform: { type: "boolean", description: "Zero the outfit's local position and rotation (default true for prefabs)." },
+      },
+      required: ["outfitPath"],
+    },
+    handler: async (args) => formatResult(await vrcOutfitAttach(args)),
+  },
+  {
+    name: "unity_vrc_playmode_test",
+    description:
+      "Test an avatar in play mode through Gesture Manager or Av3Emulator: enters play mode if needed, sets parameters and gestures, reads them back, and captures the avatar. Shows whether a toggle really works. Play mode is left running.",
+    vrchatProjectType: "avatar",
+    vrchatIntegration: ["gestureManager", "av3Emulator"],
+    pluginFeature: AUTHORING_V2,
+    inputSchema: {
+      type: "object",
+      properties: {
+        avatarPath: avatarPathProperty,
+        parameters: { type: "object", description: "Values by parameter name, e.g. {\"Jacket\": true, \"Hue\": 0.5}." },
+        gestureLeft: {
+          anyOf: [{ type: "integer" }, { type: "string" }],
+          description: "0-7 or a name: neutral, fist, open, point, peace, rock, gun, thumbs.",
+        },
+        gestureRight: { anyOf: [{ type: "integer" }, { type: "string" }], description: "Same as gestureLeft." },
+        enterPlayMode: { type: "boolean", description: "Enter play mode when needed (default true)." },
+        settleMs: { type: "number", description: "Wait after setting, in ms (default 1000)." },
+        capture: { type: "boolean", description: "Return an image (default true)." },
+        view: { type: "string", enum: ["front", "back", "left", "right", "face"] },
+        width: { type: "number", description: "Image size in pixels (default 512 x 512)." },
+        height: { type: "number" },
+      },
+    },
+    handler: async (args) => {
+      const result = await vrcPlaymodeTest(args);
+      return result?.data?.base64 ? imageResultBlocks(result, "Avatar capture returned no image data") : formatResult(result);
+    },
+  },
+  {
+    name: "unity_vrc_blendshapes_list",
+    description:
+      "List a mesh's blendshape names and weights (default: the face mesh). faceTracking adds Unified Expressions, ARKit and SRanipal coverage.",
+    vrchatProjectType: "avatar",
+    pluginFeature: AUTHORING_V2,
+    inputSchema: {
+      type: "object",
+      properties: {
+        avatarPath: avatarPathProperty,
+        meshPath: { type: "string", description: "SkinnedMeshRenderer path under the avatar." },
+        filter: { type: "string", description: "Only names containing this text." },
+        faceTracking: { type: "boolean", description: "Report face-tracking blendshape coverage." },
+      },
+    },
+    handler: async (args) => formatResult(await vrcBlendshapesList(args)),
+  },
+  {
+    name: "unity_vrc_blendshapes_set",
+    description: "Set blendshape weights (0-100) on a mesh by name. Every name is checked before anything changes.",
+    vrchatProjectType: "avatar",
+    pluginFeature: AUTHORING_V2,
+    inputSchema: {
+      type: "object",
+      properties: {
+        avatarPath: avatarPathProperty,
+        meshPath: { type: "string", description: "SkinnedMeshRenderer path under the avatar (default: the face mesh)." },
+        weights: { type: "object", description: "Weights by blendshape name, e.g. {\"Smile\": 100}." },
+      },
+      required: ["weights"],
+    },
+    handler: async (args) => formatResult(await vrcBlendshapesSet(args)),
   },
 ];

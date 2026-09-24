@@ -1,32 +1,7 @@
 // AnkleBreaker Unity MCP â€” Tool definitions for Unity Editor operations (via HTTP bridge)
 import * as bridge from "../unity-editor-bridge.js";
-import { formatResult, looksLikeErrorObject } from "../response-format.js";
+import { formatResult, looksLikeErrorObject, imageResultBlocks } from "../response-format.js";
 import { isUnknownRouteResult } from "../capabilities.js";
-
-// Shared shaping for image-returning graphics tools.
-// The bridge wraps plugin payloads as { success, data: { ..., base64 } } (queue mode)
-// but legacy mode and some code paths surface { ..., base64 } at the top level, so the
-// image is looked up at both depths. The base64 payload must NEVER remain inside the
-// metadata text block: a single leaked PNG is a multi-hundred-KB token bomb.
-function imageResultBlocks(result, noImageError) {
-  if (result.error) return formatResult(result);
-  const imageData = result.data?.base64 || result.base64;
-  if (!imageData || typeof imageData !== "string") {
-    // noImageError last so an empty-string result.error can't clobber the message.
-    return formatResult({ ...result, error: noImageError });
-  }
-  const metadata = { ...result };
-  delete metadata.base64;
-  if (metadata.data && typeof metadata.data === "object") {
-    metadata.data = { ...metadata.data };
-    delete metadata.data.base64;
-  }
-  const b64 = imageData.replace(/^data:image\/\w+;base64,/, "");
-  return [
-    { type: "image", data: b64, mimeType: "image/png" },
-    { type: "text", text: formatResult(metadata) },
-  ];
-}
 
 // Console entries ship a full multi-frame stack trace on EVERY entry — measured at
 // ~80% of a typical console payload, almost all of it noise for plain info logs.
